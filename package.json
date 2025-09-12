@@ -1,0 +1,29 @@
+{
+  "name": "stera-icon-exporter",
+  "version": "1.0.0",
+  "description": "A Figma plugin for exporting icons with metadata",
+  "main": "code.js",
+  "scripts": {
+    "build": "tsc && rm -f ui.html && cp src/ui.html ui.html",
+    "watch": "tsc --watch",
+    "dev": "tsc --watch && rm -f ui.html && cp src/ui.html ui.html"
+  },
+  "keywords": [
+    "figma",
+    "plugin",
+    "icons",
+    "export",
+    "svg"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.88.0",
+    "typescript": "^5.0.0",
+    "copyfiles": "^2.4.1"
+  },
+  "dependencies": {
+    "fs-extra": "^11.1.1",
+    "jszip": "^3.10.1"
+  }
+}

@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Stera Icon Exporter</title>
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: #ffffff;
+      color: #333;
+    }
+    
+    .container {
+      max-width: 100%;
+    }
+    
+    h1 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0 0 16px 0;
+      color: #1e1e1e;
+    }
+    
+    .description {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 20px;
+      line-height: 1.4;
+    }
+    
+    .button {
+      width: 100%;
+      padding: 8px 16px;
+      background: #0d99ff;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    
+    .button:hover {
+      background: #0b8ce8;
+    }
+    
+    .button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    
+    .status {
+      margin-top: 12px;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      display: none;
+    }
+    
+    .status.success {
+      background: #e8f5e8;
+      color: #2d5a2d;
+      border: 1px solid #c3e6c3;
+    }
+    
+    .status.error {
+      background: #ffeaea;
+      color: #d32f2f;
+      border: 1px solid #ffcdd2;
+    }
+    
+    .status.info {
+      background: #e3f2fd;
+      color: #1976d2;
+      border: 1px solid #bbdefb;
+    }
+    
+    .status.processing {
+      background: #fff3e0;
+      color: #f57c00;
+      border: 1px solid #ffcc02;
+    }
+    
+    .progress-container {
+      margin-top: 12px;
+      display: none;
+    }
+    
+    .progress-bar {
+      width: 100%;
+      height: 6px;
+      background: #e0e0e0;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+    
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #0d99ff, #0b8ce8);
+      border-radius: 3px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+    
+    .progress-text {
+      font-size: 10px;
+      color: #666;
+      text-align: center;
+    }
+    
+    .spinner {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 50%;
+      border-top-color: #0d99ff;
+      animation: spin 1s ease-in-out infinite;
+      margin-right: 6px;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .instructions {
+      background: #f8f9fa;
+      border: 1px solid #e9ecef;
+      border-radius: 6px;
+      padding: 12px;
+      margin-bottom: 16px;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    
+    .instructions h3 {
+      margin: 0 0 8px 0;
+      font-size: 12px;
+      font-weight: 600;
+      color: #495057;
+    }
+    
+    .instructions ul {
+      margin: 0;
+      padding-left: 16px;
+    }
+    
+    .instructions li {
+      margin-bottom: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <button id="export-btn" class="button">Export Icons</button>
+    <div class="instructions">
+      <h3>Setup Instructions:</h3>
+      <ul>
+        <li>Navigate to the page containing your icon components</li>
+        <li>Add your icon components to this page</li>
+        <li>Name your components (e.g., "arrow-left", "facebook", "menu")</li>
+        <li>Add descriptions with comma-separated tags</li>
+      </ul>
+    </div>
+    
+    <div class="description">
+      This plugin will export all components from the current page as a single JSON file with embedded SVG data and metadata.
+    </div>
+    
+    <div id="status" class="status"></div>
+    <div id="progress-container" class="progress-container">
+      <div class="progress-bar">
+        <div id="progress-fill" class="progress-fill"></div>
+      </div>
+      <div id="progress-text" class="progress-text"></div>
+    </div>
+  </div>
+
+  <script>
+    const exportBtn = document.getElementById('export-btn');
+    const testBtn = document.getElementById('test-btn');
+    const statusDiv = document.getElementById('status');
+    const progressContainer = document.getElementById('progress-container');
+    const progressFill = document.getElementById('progress-fill');
+    const progressText = document.getElementById('progress-text');
+    
+    function showStatus(message, type) {
+      statusDiv.innerHTML = type === 'processing' ? `<span class="spinner"></span>${message}` : message;
+      statusDiv.className = `status ${type}`;
+      statusDiv.style.display = 'block';
+    }
+    
+    function hideStatus() {
+      statusDiv.style.display = 'none';
+    }
+    
+    function showProgress(percentage, message) {
+      progressContainer.style.display = 'block';
+      progressFill.style.width = `${percentage}%`;
+      progressText.textContent = message || `${percentage}%`;
+    }
+    
+    function hideProgress() {
+      progressContainer.style.display = 'none';
+    }
+    
+    exportBtn.addEventListener('click', () => {
+      exportBtn.disabled = true;
+      hideProgress();
+      showStatus('Starting icon export...', 'processing');
+      
+      parent.postMessage({ pluginMessage: { type: 'export-icons' } }, '*');
+    });
+    
+    testBtn.addEventListener('click', () => {
+      console.log('Testing JSON export...');
+      
+      // Create test JSON structure
+      const testExport = {
+        icons: [
+          {
+            name: "alert-circle",
+            tags: "warning, caution, attention, important, error, danger",
+            variants: [
+              {
+                variant: "outline",
+                svg: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">\n<path d="M12 15C12.8284 15 13.5 15.6716 13.5 16.5C13.5 17.3284 12.8284 18 12 18C11.1716 18 10.5 17.3284 10.5 16.5C10.5 15.6716 11.1716 15 12 15Z" fill="black"/>\n<path d="M12 6C12.5523 6 13 6.44772 13 7V12C13 12.5523 12.5523 13 12 13C11.4477 13 11 12.5523 11 12V7C11 6.44772 11.4477 6 12 6Z" fill="black"/>\n<path fill-rule="evenodd" clip-rule="evenodd" d="M12 1C18.0751 1 23 5.92487 23 12C23 18.0751 18.0751 23 12 23C5.92487 23 1 18.0751 1 12C1 5.92487 5.92487 1 12 1ZM12 3C7.02944 3 3 7.02944 3 12C3 16.9706 7.02944 21 12 21C16.9706 21 21 16.9706 21 12C21 7.02944 16.9706 3 12 3Z" fill="black"/>\n</svg>'
+              },
+              {
+                variant: "fill",
+                svg: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">\n<path d="M12 15C12.8284 15 13.5 15.6716 13.5 16.5C13.5 17.3284 12.8284 18 12 18C11.1716 18 10.5 17.3284 10.5 16.5C10.5 15.6716 11.1716 15 12 15Z" fill="white"/>\n<path d="M12 6C12.5523 6 13 6.44772 13 7V12C13 12.5523 12.5523 13 12 13C11.4477 13 11 12.5523 11 12V7C11 6.44772 11.4477 6 12 6Z" fill="white"/>\n<path fill-rule="evenodd" clip-rule="evenodd" d="M12 1C18.0751 1 23 5.92487 23 12C23 18.0751 18.0751 23 12 23C5.92487 23 1 18.0751 1 12C1 5.92487 5.92487 1 12 1Z" fill="black"/>\n</svg>'
+              },
+              {
+                variant: "stroke",
+                svg: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">\n<path d="M12 15C12.8284 15 13.5 15.6716 13.5 16.5C13.5 17.3284 12.8284 18 12 18C11.1716 18 10.5 17.3284 10.5 16.5C10.5 15.6716 11.1716 15 12 15Z" fill="black"/>\n<path d="M12 6C12.5523 6 13 6.44772 13 7V12C13 12.5523 12.5523 13 12 13C11.4477 13 11 12.5523 11 12V7C11 6.44772 11.4477 6 12 6Z" fill="black"/>\n<path fill-rule="evenodd" clip-rule="evenodd" d="M12 1C18.0751 1 23 5.92487 23 12C23 18.0751 18.0751 23 12 23C5.92487 23 1 18.0751 1 12C1 5.92487 5.92487 1 12 1ZM12 3C7.02944 3 3 7.02944 3 12C3 16.9706 7.02944 21 12 21C16.9706 21 21 16.9706 21 12C21 7.02944 16.9706 3 12 3Z" fill="none" stroke="black" stroke-width="2"/>\n</svg>'
+              }
+            ]
+          }
+        ],
+        exportedAt: new Date().toISOString(),
+        totalIcons: 1
+      };
+      
+      // Download test JSON
+      downloadFile(JSON.stringify(testExport, null, 2), 'test-icons-export.json', 'application/json');
+      showStatus('Downloaded test JSON file!', 'success');
+    });
+    
+    // File download utilities
+    function downloadFile(content, filename, mimeType) {
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    // Store files for batch download
+    let pendingFiles = [];
+    let isDownloading = false;
+    let allFilesCollected = false;
+    let totalFilesExpected = 0;
+
+    // Listen for messages from the plugin
+    window.onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+      console.log('UI received message:', msg.type, msg);
+      
+      if (msg.type === 'success') {
+        showStatus(msg.message, 'success');
+        hideProgress();
+        exportBtn.disabled = false;
+        isDownloading = false;
+      } else if (msg.type === 'error') {
+        showStatus(msg.message, 'error');
+        hideProgress();
+        exportBtn.disabled = false;
+        isDownloading = false;
+      } else if (msg.type === 'status') {
+        showStatus(msg.message, 'processing');
+        // Show progress bar when processing starts
+        if (msg.message.includes('Scanning') || msg.message.includes('Processing') || msg.message.includes('Generating')) {
+          showProgress(0, msg.message);
+        }
+      } else if (msg.type === 'progress') {
+        showStatus(msg.message, 'processing');
+        
+        // Extract percentage from progress message
+        const percentageMatch = msg.message.match(/\((\d+)%\)/);
+        if (percentageMatch) {
+          const percentage = parseInt(percentageMatch[1]);
+          showProgress(percentage, msg.message);
+        } else {
+          // Extract current/total from progress message for manual percentage calculation
+          const match = msg.message.match(/(\d+)\/(\d+)/);
+          if (match) {
+            const current = parseInt(match[1]);
+            const total = parseInt(match[2]);
+            const percentage = Math.round((current / total) * 100);
+            showProgress(percentage, msg.message);
+            totalFilesExpected = total + 1; // +1 for metadata file
+            console.log('Total files expected:', totalFilesExpected);
+          }
+        }
+      } else if (msg.type === 'save-icons-export') {
+        // Download the single JSON file with all icons
+        console.log('Downloading icons export JSON file');
+        downloadFile(msg.data.content, msg.data.filename, 'application/json');
+        showStatus(`Downloaded ${msg.data.filename} with all icons and variants!`, 'success');
+        hideProgress();
+      }
+    };
+
+    // Download all files as individual files with delay
+    async function downloadAsZip() {
+      console.log(`Downloading ${pendingFiles.length} files individually`);
+      showStatus(`Downloading ${pendingFiles.length} files...`, 'info');
+      
+      try {
+        // Download each file with a delay to avoid browser blocking
+        for (let i = 0; i < pendingFiles.length; i++) {
+          const file = pendingFiles[i];
+          
+          // Create a delay between downloads
+          if (i > 0) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+          
+          // Download the file
+          downloadFile(file.content, file.filename, file.mimeType);
+          console.log(`Downloaded: ${file.filename}`);
+          
+          // Update progress
+          showStatus(`Downloaded ${i + 1}/${pendingFiles.length} files...`, 'info');
+        }
+        
+        showStatus(`Successfully downloaded all ${pendingFiles.length} files!`, 'success');
+        console.log(`Downloaded all ${pendingFiles.length} files`);
+        
+        // Clear pending files
+        pendingFiles = [];
+      } catch (error) {
+        console.error('Failed to download files:', error);
+        showStatus('Error downloading files', 'error');
+      }
+    }
+    
+    // Create a simple HTML file that contains all the files
+    function createZipContent() {
+      const timestamp = new Date().toISOString();
+      let html = `<!DOCTYPE html>
+<html>
+<head>
+    <title>Icon Export - ${timestamp}</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .file { margin: 10px 0; padding: 10px; border: 1px solid #ddd; }
+        .filename { font-weight: bold; color: #333; }
+        .content { margin-top: 10px; white-space: pre-wrap; font-family: monospace; }
+        .svg { background: #f9f9f9; }
+        .json { background: #f0f8ff; }
+    </style>
+</head>
+<body>
+    <h1>Icon Export - ${timestamp}</h1>
+    <p>This file contains ${pendingFiles.length} exported files from Figma.</p>
+    <p>You can copy the content of each file below and save them as individual files.</p>
+`;
+      
+      pendingFiles.forEach((file, index) => {
+        const isSvg = file.mimeType === 'image/svg+xml';
+        const isJson = file.mimeType === 'application/json';
+        const className = isSvg ? 'svg' : isJson ? 'json' : '';
+        
+        html += `
+    <div class="file ${className}">
+        <div class="filename">File ${index + 1}: ${file.filename}</div>
+        <div class="content">${file.content}</div>
+    </div>`;
+      });
+      
+      html += `
+</body>
+</html>`;
+      
+      return html;
+    }
+  </script>
+</body>
+</html>
