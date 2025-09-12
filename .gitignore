@@ -9,6 +9,7 @@ yarn-error.log*
 *.js.map
 *.d.ts
 *.d.ts.map
+ui.html
 
 # IDE
 .vscode/

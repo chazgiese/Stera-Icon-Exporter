@@ -41,6 +41,8 @@
       font-weight: 500;
       cursor: pointer;
       transition: background-color 0.2s;
+      position: relative;
+      overflow: hidden;
     }
     
     .button:hover {
@@ -50,6 +52,23 @@
     .button:disabled {
       background: #ccc;
       cursor: not-allowed;
+    }
+    
+    .button.processing {
+      background: #f57c00;
+      cursor: not-allowed;
+    }
+    
+    .button .button-content {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    
+    .button .progress-text {
+      font-size: 11px;
+      margin-left: 6px;
     }
     
     .status {
@@ -85,33 +104,6 @@
       border: 1px solid #ffcc02;
     }
     
-    .progress-container {
-      margin-top: 12px;
-      display: none;
-    }
-    
-    .progress-bar {
-      width: 100%;
-      height: 6px;
-      background: #e0e0e0;
-      border-radius: 3px;
-      overflow: hidden;
-      margin-bottom: 8px;
-    }
-    
-    .progress-fill {
-      height: 100%;
-      background: linear-gradient(90deg, #0d99ff, #0b8ce8);
-      border-radius: 3px;
-      transition: width 0.3s ease;
-      width: 0%;
-    }
-    
-    .progress-text {
-      font-size: 10px;
-      color: #666;
-      text-align: center;
-    }
     
     .spinner {
       display: inline-block;
@@ -157,7 +149,12 @@
 </head>
 <body>
   <div class="container">
-    <button id="export-btn" class="button">Export Icons</button>
+    <button id="export-btn" class="button">
+      <div class="button-content">
+        <span id="button-text">Export Icons</span>
+        <span id="button-progress" class="progress-text" style="display: none;"></span>
+      </div>
+    </button>
     <div class="instructions">
       <h3>Setup Instructions:</h3>
       <ul>
@@ -173,24 +170,17 @@
     </div>
     
     <div id="status" class="status"></div>
-    <div id="progress-container" class="progress-container">
-      <div class="progress-bar">
-        <div id="progress-fill" class="progress-fill"></div>
-      </div>
-      <div id="progress-text" class="progress-text"></div>
-    </div>
   </div>
 
   <script>
     const exportBtn = document.getElementById('export-btn');
     const testBtn = document.getElementById('test-btn');
     const statusDiv = document.getElementById('status');
-    const progressContainer = document.getElementById('progress-container');
-    const progressFill = document.getElementById('progress-fill');
-    const progressText = document.getElementById('progress-text');
+    const buttonText = document.getElementById('button-text');
+    const buttonProgress = document.getElementById('button-progress');
     
     function showStatus(message, type) {
-      statusDiv.innerHTML = type === 'processing' ? `<span class="spinner"></span>${message}` : message;
+      statusDiv.innerHTML = `<span class="spinner"></span>${message}`;
       statusDiv.className = `status ${type}`;
       statusDiv.style.display = 'block';
     }
@@ -199,20 +189,24 @@
       statusDiv.style.display = 'none';
     }
     
-    function showProgress(percentage, message) {
-      progressContainer.style.display = 'block';
-      progressFill.style.width = `${percentage}%`;
-      progressText.textContent = message || `${percentage}%`;
+    function updateButtonProgress(message) {
+      buttonText.style.display = 'none';
+      buttonProgress.style.display = 'inline';
+      buttonProgress.textContent = message;
+      exportBtn.classList.add('processing');
+      exportBtn.disabled = true;
     }
     
-    function hideProgress() {
-      progressContainer.style.display = 'none';
+    function resetButton() {
+      buttonText.style.display = 'inline';
+      buttonProgress.style.display = 'none';
+      exportBtn.classList.remove('processing');
+      exportBtn.disabled = false;
     }
     
     exportBtn.addEventListener('click', () => {
-      exportBtn.disabled = true;
-      hideProgress();
-      showStatus('Starting icon export...', 'processing');
+      hideStatus();
+      updateButtonProgress('Starting export...');
       
       parent.postMessage({ pluginMessage: { type: 'export-icons' } }, '*');
     });
@@ -276,47 +270,25 @@
       console.log('UI received message:', msg.type, msg);
       
       if (msg.type === 'success') {
-        showStatus(msg.message, 'success');
-        hideProgress();
-        exportBtn.disabled = false;
+        // Don't show success status - browser download prompt indicates success
+        resetButton();
         isDownloading = false;
       } else if (msg.type === 'error') {
         showStatus(msg.message, 'error');
-        hideProgress();
-        exportBtn.disabled = false;
+        resetButton();
         isDownloading = false;
       } else if (msg.type === 'status') {
-        showStatus(msg.message, 'processing');
-        // Show progress bar when processing starts
-        if (msg.message.includes('Scanning') || msg.message.includes('Processing') || msg.message.includes('Generating')) {
-          showProgress(0, msg.message);
-        }
+        // Update button with status message
+        updateButtonProgress(msg.message);
       } else if (msg.type === 'progress') {
-        showStatus(msg.message, 'processing');
-        
-        // Extract percentage from progress message
-        const percentageMatch = msg.message.match(/\((\d+)%\)/);
-        if (percentageMatch) {
-          const percentage = parseInt(percentageMatch[1]);
-          showProgress(percentage, msg.message);
-        } else {
-          // Extract current/total from progress message for manual percentage calculation
-          const match = msg.message.match(/(\d+)\/(\d+)/);
-          if (match) {
-            const current = parseInt(match[1]);
-            const total = parseInt(match[2]);
-            const percentage = Math.round((current / total) * 100);
-            showProgress(percentage, msg.message);
-            totalFilesExpected = total + 1; // +1 for metadata file
-            console.log('Total files expected:', totalFilesExpected);
-          }
-        }
+        // Update button with progress message
+        updateButtonProgress(msg.message);
       } else if (msg.type === 'save-icons-export') {
         // Download the single JSON file with all icons
         console.log('Downloading icons export JSON file');
         downloadFile(msg.data.content, msg.data.filename, 'application/json');
-        showStatus(`Downloaded ${msg.data.filename} with all icons and variants!`, 'success');
-        hideProgress();
+        // Don't show success status - browser download prompt indicates success
+        resetButton();
       }
     };
 
