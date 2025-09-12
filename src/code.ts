@@ -19,7 +19,7 @@ interface IconsExport {
 }
 
 // Main plugin function
-figma.showUI(__html__, { width: 300, height: 200 });
+figma.showUI(__html__, { width: 280, height: 144, themeColors: true });
 
 // Listen for messages from the UI
 figma.ui.onmessage = async (msg: any) => {
