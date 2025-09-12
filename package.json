@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc && rm -f ui.html && cp src/ui.html ui.html",
     "watch": "tsc --watch",
-    "dev": "tsc --watch && rm -f ui.html && cp src/ui.html ui.html"
+    "dev": "rm -f ui.html && cp src/ui.html ui.html && tsc --watch"
   },
   "keywords": [
     "figma",
