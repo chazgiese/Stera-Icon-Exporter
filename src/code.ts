@@ -266,12 +266,90 @@ function groupComponentsByBaseName(components: ComponentNode[]): { [baseName: st
 async function processIconGroup(baseName: string, components: ComponentNode[]): Promise<IconData> {
   // Get tags from the first component (they should be the same for all variants)
   const firstComponent = components[0];
-  const description = (firstComponent as any).description || '';
-  const tags = description
+  
+  // Get description using official Figma Plugin API
+  // Note: There's a known bug in Figma where description field may appear missing
+  // until nodes are re-published. We'll try both plain text and markdown versions.
+  let description = '';
+  
+  // Primary method: Use official description property (plain text)
+  if ((firstComponent as any).description) {
+    description = (firstComponent as any).description;
+  }
+  // Fallback: Try descriptionMarkdown (rich text with markdown)
+  else if ((firstComponent as any).descriptionMarkdown) {
+    // Convert markdown to plain text for tags (remove markdown syntax)
+    const markdownDesc = (firstComponent as any).descriptionMarkdown;
+    description = markdownDesc
+      .replace(/\*\*(.*?)\*\*/g, '$1') // Remove bold **text**
+      .replace(/\*(.*?)\*/g, '$1')     // Remove italic *text*
+      .replace(/`(.*?)`/g, '$1')       // Remove code `text`
+      .replace(/#{1,6}\s*/g, '')       // Remove headers # ## ###
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Remove links [text](url)
+      .replace(/\n/g, ', ')            // Replace newlines with commas
+      .trim();
+  }
+  // Fallback: Check parent component set description (for component sets)
+  else if (firstComponent.parent && firstComponent.parent.type === 'COMPONENT_SET') {
+    const componentSet = firstComponent.parent;
+    if ((componentSet as any).description) {
+      description = (componentSet as any).description;
+    } else if ((componentSet as any).descriptionMarkdown) {
+      const markdownDesc = (componentSet as any).descriptionMarkdown;
+      description = markdownDesc
+        .replace(/\*\*(.*?)\*\*/g, '$1')
+        .replace(/\*(.*?)\*/g, '$1')
+        .replace(/`(.*?)`/g, '$1')
+        .replace(/#{1,6}\s*/g, '')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/\n/g, ', ')
+        .trim();
+    }
+  }
+  
+  // Log which method was used to get the description
+  if (description) {
+    if ((firstComponent as any).description) {
+      console.log(`Component "${baseName}" - Using plain text description: "${description}"`);
+    } else if ((firstComponent as any).descriptionMarkdown) {
+      console.log(`Component "${baseName}" - Using markdown description: "${description}"`);
+    } else if (firstComponent.parent && firstComponent.parent.type === 'COMPONENT_SET') {
+      console.log(`Component "${baseName}" - Using parent component set description: "${description}"`);
+    }
+  } else {
+    console.log(`Component "${baseName}" - No description found`);
+    
+    // Debug: Log available properties when no description is found
+    console.log(`Available properties on component "${baseName}":`, Object.keys(firstComponent));
+    console.log(`Component type:`, firstComponent.type);
+    
+    // Log parent properties if available
+    if (firstComponent.parent) {
+      console.log(`Parent type:`, firstComponent.parent.type);
+      console.log(`Parent properties:`, Object.keys(firstComponent.parent));
+    }
+  }
+  
+  let tags = description
     .split(',')
     .map((tag: string) => tag.trim())
     .filter((tag: string) => tag.length > 0)
     .join(', ');
+  
+  // If no description found, try to extract meaningful tags from the component name
+  if (!tags && baseName) {
+    // Convert component name to tags by splitting on common separators
+    const nameTags = baseName
+      .split(/[-_\s]+/)
+      .map(tag => tag.toLowerCase())
+      .filter(tag => tag.length > 0)
+      .join(', ');
+    
+    if (nameTags) {
+      tags = nameTags;
+      console.log(`Using component name as tags for "${baseName}": "${tags}"`);
+    }
+  }
   
   // Process each variant
   const variants: IconVariant[] = [];
