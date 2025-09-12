@@ -36,7 +36,6 @@
 
   <script>
     const exportBtn = document.getElementById('export-btn');
-    const testBtn = document.getElementById('test-btn');
     const statusDiv = document.getElementById('status');
     const buttonText = document.getElementById('button-text');
     const buttonProgress = document.getElementById('button-progress');
@@ -73,39 +72,6 @@
       parent.postMessage({ pluginMessage: { type: 'export-icons' } }, '*');
     });
     
-    testBtn.addEventListener('click', () => {
-      console.log('Testing JSON export...');
-      
-      // Create test JSON structure
-      const testExport = {
-        icons: [
-          {
-            name: "alert-circle",
-            tags: "warning, caution, attention, important, error, danger",
-            variants: [
-              {
-                variant: "outline",
-                svg: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">\n<path d="M12 15C12.8284 15 13.5 15.6716 13.5 16.5C13.5 17.3284 12.8284 18 12 18C11.1716 18 10.5 17.3284 10.5 16.5C10.5 15.6716 11.1716 15 12 15Z" fill="black"/>\n<path d="M12 6C12.5523 6 13 6.44772 13 7V12C13 12.5523 12.5523 13 12 13C11.4477 13 11 12.5523 11 12V7C11 6.44772 11.4477 6 12 6Z" fill="black"/>\n<path fill-rule="evenodd" clip-rule="evenodd" d="M12 1C18.0751 1 23 5.92487 23 12C23 18.0751 18.0751 23 12 23C5.92487 23 1 18.0751 1 12C1 5.92487 5.92487 1 12 1ZM12 3C7.02944 3 3 7.02944 3 12C3 16.9706 7.02944 21 12 21C16.9706 21 21 16.9706 21 12C21 7.02944 16.9706 3 12 3Z" fill="black"/>\n</svg>'
-              },
-              {
-                variant: "fill",
-                svg: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">\n<path d="M12 15C12.8284 15 13.5 15.6716 13.5 16.5C13.5 17.3284 12.8284 18 12 18C11.1716 18 10.5 17.3284 10.5 16.5C10.5 15.6716 11.1716 15 12 15Z" fill="white"/>\n<path d="M12 6C12.5523 6 13 6.44772 13 7V12C13 12.5523 12.5523 13 12 13C11.4477 13 11 12.5523 11 12V7C11 6.44772 11.4477 6 12 6Z" fill="white"/>\n<path fill-rule="evenodd" clip-rule="evenodd" d="M12 1C18.0751 1 23 5.92487 23 12C23 18.0751 18.0751 23 12 23C5.92487 23 1 18.0751 1 12C1 5.92487 5.92487 1 12 1Z" fill="black"/>\n</svg>'
-              },
-              {
-                variant: "stroke",
-                svg: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">\n<path d="M12 15C12.8284 15 13.5 15.6716 13.5 16.5C13.5 17.3284 12.8284 18 12 18C11.1716 18 10.5 17.3284 10.5 16.5C10.5 15.6716 11.1716 15 12 15Z" fill="black"/>\n<path d="M12 6C12.5523 6 13 6.44772 13 7V12C13 12.5523 12.5523 13 12 13C11.4477 13 11 12.5523 11 12V7C11 6.44772 11.4477 6 12 6Z" fill="black"/>\n<path fill-rule="evenodd" clip-rule="evenodd" d="M12 1C18.0751 1 23 5.92487 23 12C23 18.0751 18.0751 23 12 23C5.92487 23 1 18.0751 1 12C1 5.92487 5.92487 1 12 1ZM12 3C7.02944 3 3 7.02944 3 12C3 16.9706 7.02944 21 12 21C16.9706 21 21 16.9706 21 12C21 7.02944 16.9706 3 12 3Z" fill="none" stroke="black" stroke-width="2"/>\n</svg>'
-              }
-            ]
-          }
-        ],
-        exportedAt: new Date().toISOString(),
-        totalIcons: 1
-      };
-      
-      // Download test JSON
-      downloadFile(JSON.stringify(testExport, null, 2), 'test-icons-export.json', 'application/json');
-      showStatus('Downloaded test JSON file!', 'success');
-    });
     
     // File download utilities
     function downloadFile(content, filename, mimeType) {
