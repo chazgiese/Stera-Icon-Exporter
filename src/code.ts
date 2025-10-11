@@ -263,6 +263,142 @@ function groupComponentsByBaseName(components: ComponentNode[]): { [baseName: st
   return groups;
 }
 
+/**
+ * Deduplicates *exact* duplicate leaf shapes in an SVG string.
+ * Safe-by-default: only removes elements proven visually redundant.
+ * Works in Figma plugin (no DOM).
+ */
+function deduplicateSVG(svgString: string): string {
+  try {
+    const svgMatch = svgString.match(/^<svg\b[^>]*>/i);
+    if (!svgMatch) return svgString;
+    const svgOpen = svgMatch[0];
+    const svgClose = '</svg>';
+
+    const start = svgOpen.length;
+    const end = svgString.lastIndexOf(svgClose);
+    if (end < start) return svgString;
+
+    const body = svgString.slice(start, end);
+
+    // Match self-closing or paired elements: <tag .../> OR <tag ...>...</tag>
+    // We will only dedupe *leaf* shapes; paired-with-children will be kept.
+    const elementRe = /<([A-Za-z_][\w:.-]*)(\s+[^>]*?)?\s*(\/>|>([\s\S]*?)<\/\1>)/g;
+
+    // Tags we consider for dedupe (leaf shapes)
+    const SHAPE_TAGS = new Set([
+      'path','rect','circle','ellipse','line','polyline','polygon'
+    ]);
+
+    // Quick helpers
+    const collapseWs = (s: string) => s.replace(/\s+/g, ' ').trim();
+    const stripNs = (tag: string) => tag.replace(/^[A-Za-z_]\w*:/, ''); // strip "svg:" etc.
+
+    // Parse attributes into a sorted, normalized record
+    const parseAttrs = (attrSrc = ''): Record<string,string> => {
+      const out: Record<string,string> = {};
+      // attr="..." | '...' | bare
+      const attrRe = /([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>/]+))/g;
+      let m: RegExpExecArray | null;
+      while ((m = attrRe.exec(attrSrc))) {
+        const name = m[1];
+        const val = m[2] || m[3] || m[4] || '';
+        out[name] = val;
+      }
+      return out;
+    };
+
+    // Normalize attrs for hashing (ignore order & minor formatting)
+    const normalizeAttrs = (attrs: Record<string,string>): Record<string,string> => {
+      const norm: Record<string,string> = {};
+      for (const [k, v] of Object.entries(attrs)) {
+        let vv = v;
+        // normalize whitespace
+        vv = vv.replace(/\s+/g, ' ').trim();
+        // normalize path data spacing (do NOT alter numbers/content)
+        if (k === 'd') vv = vv.replace(/\s+/g, ' ').trim();
+        norm[k] = vv;
+      }
+      return norm;
+    };
+
+    // Remove only when provably safe not to change rendering
+    const isSafeToRemove = (tag: string, attrs: Record<string,string>, hasChildren: boolean): boolean => {
+      if (hasChildren) return false; // only leaf nodes
+      const t = stripNs(tag).toLowerCase();
+      if (!SHAPE_TAGS.has(t)) return false;
+
+      const a = attrs;
+      const val = (k: string, def = '') => (a[k] || def).trim();
+
+      // Anything that suggests styling, references, or hooks → keep
+      const riskyAttrs = [
+        'id','class','style','filter','mask','clip-path','clipPath','transform'
+      ];
+      if (riskyAttrs.some(k => a[k] != null)) return false;
+      if (Object.values(a).some(v => /url\(#/.test(v))) return false;
+
+      // Opacity guards
+      const full = (k: string) => (a[k] == null) || /^[01](?:\.0+)?$/.test(a[k] as string);
+      if (!full('opacity')) return false;
+      if (!full('fill-opacity')) return false;
+      if (!full('stroke-opacity')) return false;
+
+      // Strokes can change visual weight when doubled; require absence
+      if (a['stroke'] != null && a['stroke'] !== 'none') return false;
+
+      // OK to remove duplicates of pure fills at full opacity
+      return true;
+    };
+
+    // Canonical key = tag + sorted attrs (name=value)
+    const keyOf = (tag: string, attrs: Record<string,string>): string => {
+      const t = stripNs(tag).toLowerCase();
+      const norm = normalizeAttrs(attrs);
+      const keys = Object.keys(norm).sort();
+      // You can choose to *exclude* benign attrs from the key if desired.
+      const pairs = keys.map(k => `${k}=${norm[k]}`);
+      return `${t}|${pairs.join(';')}`;
+    };
+
+    const seen = new Set<string>();
+    const out: string[] = [];
+    let removed = 0;
+
+    elementRe.lastIndex = 0;
+    let m: RegExpExecArray | null;
+
+    while ((m = elementRe.exec(body))) {
+      const [, rawTag, rawAttrs = '', selfOrClose, inner = ''] = m;
+      const tag = rawTag;
+      const hasChildren = selfOrClose.startsWith('>'); // paired form
+      const attrs = parseAttrs(rawAttrs);
+
+      // Only dedupe safe leaf shapes; otherwise keep as-is
+      if (isSafeToRemove(tag, attrs, hasChildren)) {
+        const k = keyOf(tag, attrs);
+        if (seen.has(k)) {
+          removed++;
+          continue; // drop duplicate
+        }
+        seen.add(k);
+      }
+
+      // Keep original element exactly as authored
+      out.push(m[0]);
+    }
+
+    if (removed > 0) {
+      console.log(`[deduplicateSVG] removed ${removed} duplicate element(s)`);
+    }
+
+    return `${svgOpen}\n${out.join('\n')}\n${svgClose}`;
+  } catch (err) {
+    console.error('[deduplicateSVG] error', err);
+    return svgString;
+  }
+}
+
 async function processIconGroup(baseName: string, components: ComponentNode[]): Promise<IconData> {
   // Get tags from the first component (they should be the same for all variants)
   const firstComponent = components[0];
@@ -405,9 +541,12 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
       const svgData = await (component as any).exportAsync({ format: 'SVG' });
       const svgString = String.fromCharCode.apply(null, Array.from(svgData));
       
+      // Deduplicate the SVG to remove any duplicate shapes
+      const deduplicatedSvg = deduplicateSVG(svgString);
+      
       variants.push({
         variant: variantName,
-        svg: svgString
+        svg: deduplicatedSvg
       });
     } catch (error) {
       console.error(`Failed to export variant ${(component as any).name}:`, error);
@@ -439,3 +578,4 @@ async function saveIconsExport(iconsData: IconData[]): Promise<void> {
     }
   });
 }
+
