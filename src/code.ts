@@ -4,18 +4,215 @@
 interface IconVariant {
   variant: string;
   svg: string;
+  hash: string;
 }
 
 interface IconData {
   name: string;
-  tags: string;
+  tags: string[];
   variants: IconVariant[];
 }
 
 interface IconsExport {
-  icons: IconData[];
+  schemaVersion: string;
   exportedAt: string;
   totalIcons: number;
+  icons: IconData[];
+}
+
+// Constants
+const SCHEMA_VERSION = "1.0.0";
+const ALLOWED_VARIANTS = ["Bold", "Fill", "Filltone", "Linetone", "Regular"];
+const TONE_VARIANTS = ["Filltone", "Linetone"];
+const REQUIRED_VIEWBOX = "0 0 24 24";
+const TONE_OPACITY = "0.32";
+
+/**
+ * Normalizes SVG string for consistent output and hashing
+ */
+function normalizeSVG(svgString: string): string {
+  try {
+    // Remove any existing whitespace and normalize
+    let normalized = svgString
+      .replace(/\s+/g, ' ') // Replace multiple whitespace with single space
+      .replace(/>\s+</g, '><') // Remove whitespace between tags
+      .trim();
+    
+    // Ensure viewBox is present and correct
+    if (!normalized.includes('viewBox=')) {
+      normalized = normalized.replace(
+        /<svg\b([^>]*)>/i,
+        `<svg$1 viewBox="${REQUIRED_VIEWBOX}">`
+      );
+    } else {
+      // Normalize existing viewBox
+      normalized = normalized.replace(
+        /viewBox\s*=\s*["']([^"']*)["']/i,
+        `viewBox="${REQUIRED_VIEWBOX}"`
+      );
+    }
+    
+    // Remove unstable attributes that shouldn't affect the hash
+    normalized = normalized
+      .replace(/\s+id\s*=\s*["'][^"']*["']/gi, '') // Remove id attributes
+      .replace(/\s+class\s*=\s*["'][^"']*["']/gi, '') // Remove class attributes
+      .replace(/\s+data-[^=]*\s*=\s*["'][^"']*["']/gi, ''); // Remove data attributes
+    
+    // Normalize attribute spacing
+    normalized = normalized.replace(/\s+/g, ' ').trim();
+    
+    return normalized;
+  } catch (error) {
+    console.error('Error normalizing SVG:', error);
+    return svgString;
+  }
+}
+
+/**
+ * Generates a stable hash for SVG content using a simple but effective algorithm
+ * This provides consistent hashing for diffing and incremental builds
+ */
+function generateHash(input: string): string {
+  let hash = 0;
+  if (input.length === 0) return hash.toString(16);
+  
+  for (let i = 0; i < input.length; i++) {
+    const char = input.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  
+  // Convert to positive hex string, padded to 8 characters
+  return Math.abs(hash).toString(16).padStart(8, '0');
+}
+
+/**
+ * Converts string to kebab-case
+ */
+function toKebabCase(str: string): string {
+  return str
+    .replace(/([a-z])([A-Z])/g, '$1-$2') // Add hyphen before capital letters
+    .replace(/[\s_]+/g, '-') // Replace spaces and underscores with hyphens
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '') // Remove non-alphanumeric characters except hyphens
+    .replace(/-+/g, '-') // Replace multiple hyphens with single hyphen
+    .replace(/^-|-$/g, ''); // Remove leading/trailing hyphens
+}
+
+/**
+ * Validates SVG content for tone variants and other requirements
+ */
+function validateSVG(svgString: string, variant: string): { isValid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  
+  // Check viewBox
+  if (!svgString.includes(`viewBox="${REQUIRED_VIEWBOX}"`)) {
+    errors.push(`Missing or incorrect viewBox. Expected: "${REQUIRED_VIEWBOX}"`);
+  }
+  
+  // Check tone variant requirements
+  if (TONE_VARIANTS.includes(variant)) {
+    if (!svgString.includes(`opacity="${TONE_OPACITY}"`)) {
+      errors.push(`Tone variant "${variant}" must include opacity="${TONE_OPACITY}"`);
+    }
+  } else {
+    // Non-tone variants should not have fixed hex colors
+    const hexColorRegex = /fill\s*=\s*["']#[0-9a-fA-F]{3,6}["']/g;
+    if (hexColorRegex.test(svgString)) {
+      errors.push(`Non-tone variant "${variant}" should not contain fixed hex colors (fill="#...")`);
+    }
+  }
+  
+  return {
+    isValid: errors.length === 0,
+    errors
+  };
+}
+
+/**
+ * Processes and normalizes tags array
+ */
+function processTags(tagsString: string): string[] {
+  if (!tagsString) return [];
+  
+  return tagsString
+    .split(',')
+    .map(tag => tag.trim().toLowerCase())
+    .filter(tag => tag.length > 0)
+    .filter((tag, index, array) => array.indexOf(tag) === index) // Remove duplicates
+    .sort(); // Sort alphabetically
+}
+
+/**
+ * Checks for duplicate icon names across component sets and individual components
+ * Returns an array of duplicate names found
+ */
+function checkForDuplicateNames(componentSets: any[], components: ComponentNode[]): string[] {
+  const nameCounts: { [key: string]: number } = {};
+  const duplicateNames: string[] = [];
+  
+  // Count component set names
+  componentSets.forEach(componentSet => {
+    const setName = (componentSet as any).name;
+    if (setName) {
+      nameCounts[setName] = (nameCounts[setName] || 0) + 1;
+    }
+  });
+  
+  // Count individual component base names (grouped by base name like component sets)
+  const individualComponents = components.filter(comp => {
+    // Check if this component is already part of a component set
+    let isPartOfComponentSet = false;
+    for (const componentSet of componentSets) {
+      if ('children' in componentSet) {
+        for (const child of componentSet.children) {
+          if (child.type === 'COMPONENT' && (child as any).id === (comp as any).id) {
+            isPartOfComponentSet = true;
+            break;
+          }
+        }
+      }
+      if (isPartOfComponentSet) break;
+    }
+    return !isPartOfComponentSet;
+  });
+  
+  // Group individual components by base name (same logic as in groupComponentsByBaseName)
+  const individualGroups: { [baseName: string]: ComponentNode[] } = {};
+  individualComponents.forEach(component => {
+    const name = (component as any).name;
+    
+    // Extract base name (everything before the last slash or variant indicator)
+    let baseName = name;
+    
+    // Handle variant naming patterns like "icon-name/variant" or "icon-name=variant"
+    if (name.includes('/')) {
+      baseName = name.split('/')[0];
+    } else if (name.includes('=')) {
+      baseName = name.split('=')[0];
+    } else if (name.includes(' - ')) {
+      baseName = name.split(' - ')[0];
+    }
+    
+    if (!individualGroups[baseName]) {
+      individualGroups[baseName] = [];
+    }
+    individualGroups[baseName].push(component);
+  });
+  
+  // Count individual component group names
+  Object.keys(individualGroups).forEach(baseName => {
+    nameCounts[baseName] = (nameCounts[baseName] || 0) + 1;
+  });
+  
+  // Find duplicates
+  Object.entries(nameCounts).forEach(([name, count]) => {
+    if (count > 1) {
+      duplicateNames.push(name);
+    }
+  });
+  
+  return duplicateNames;
 }
 
 // Main plugin function
@@ -52,6 +249,18 @@ async function exportIcons(): Promise<void> {
   
   if (components.length === 0 && componentSets.length === 0) {
     throw new Error(`No components or component sets found on the current page "${currentPage.name}". Please add some icon components to this page.`);
+  }
+
+  // Check for duplicate icon names before processing
+  const duplicateNames = checkForDuplicateNames(componentSets, components);
+  if (duplicateNames.length > 0) {
+    const isPlural = duplicateNames.length > 1;
+    const duplicateLabel = isPlural ? 'Duplicates' : 'Duplicate';
+    const errorMessage = `${duplicateLabel}: ${duplicateNames.join(', ')}`;
+    
+    // Use Figma's notification system to show the error
+    figma.notify(errorMessage, { error: true, timeout: 10000 });
+    return;
   }
   
   // Calculate total items to process
@@ -199,7 +408,7 @@ async function exportIcons(): Promise<void> {
   // Send final success message
   figma.ui.postMessage({ 
     type: 'success', 
-    message: `Successfully exported ${iconsData.length} icon groups with all variants!` 
+    message: `Successfully exported ${iconsData.length} icons` 
   });
 
   console.log(`Exported ${iconsData.length} icon groups successfully!`);
@@ -466,14 +675,11 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
     }
   }
   
-  let tags = description
-    .split(',')
-    .map((tag: string) => tag.trim())
-    .filter((tag: string) => tag.length > 0)
-    .join(', ');
+  // Process tags using the new function
+  let tagsString = description;
   
   // If no description found, try to extract meaningful tags from the component name
-  if (!tags && baseName) {
+  if (!tagsString && baseName) {
     // Convert component name to tags by splitting on common separators
     const nameTags = baseName
       .split(/[-_\s]+/)
@@ -482,10 +688,12 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
       .join(', ');
     
     if (nameTags) {
-      tags = nameTags;
-      console.log(`Using component name as tags for "${baseName}": "${tags}"`);
+      tagsString = nameTags;
+      console.log(`Using component name as tags for "${baseName}": "${tagsString}"`);
     }
   }
+  
+  const tags = processTags(tagsString);
   
   // Process each variant
   const variants: IconVariant[] = [];
@@ -538,23 +746,50 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
         }
       }
       
+      // Validate variant name
+      if (!ALLOWED_VARIANTS.includes(variantName)) {
+        console.warn(`Variant "${variantName}" is not in allowed variants: ${ALLOWED_VARIANTS.join(', ')}`);
+      }
+      
       const svgData = await (component as any).exportAsync({ format: 'SVG' });
       const svgString = String.fromCharCode.apply(null, Array.from(svgData));
       
       // Deduplicate the SVG to remove any duplicate shapes
       const deduplicatedSvg = deduplicateSVG(svgString);
       
+      // Normalize the SVG for consistent output
+      const normalizedSvg = normalizeSVG(deduplicatedSvg);
+      
+      // Validate the SVG
+      const validation = validateSVG(normalizedSvg, variantName);
+      if (!validation.isValid) {
+        console.warn(`SVG validation failed for variant "${variantName}":`, validation.errors);
+      }
+      
+      // Generate hash for the normalized SVG
+      console.log(`Generating hash for variant "${variantName}" of icon "${baseName}"`);
+      const hash = generateHash(normalizedSvg);
+      console.log(`Hash result for "${variantName}":`, hash);
+      
+      if (!hash) {
+        console.error(`Failed to generate hash for variant "${variantName}"`);
+      }
+      
       variants.push({
         variant: variantName,
-        svg: deduplicatedSvg
+        svg: normalizedSvg,
+        hash: hash
       });
     } catch (error) {
       console.error(`Failed to export variant ${(component as any).name}:`, error);
     }
   }
   
+  // Sort variants alphabetically by variant name
+  variants.sort((a, b) => a.variant.localeCompare(b.variant));
+  
   return {
-    name: baseName,
+    name: toKebabCase(baseName), // Convert to kebab-case
     tags,
     variants
   };
@@ -565,9 +800,10 @@ async function saveIconsExport(iconsData: IconData[]): Promise<void> {
   const sortedIcons = iconsData.sort((a, b) => a.name.localeCompare(b.name));
   
   const exportContent: IconsExport = {
-    icons: sortedIcons,
+    schemaVersion: SCHEMA_VERSION,
     exportedAt: new Date().toISOString(),
-    totalIcons: sortedIcons.length
+    totalIcons: sortedIcons.length,
+    icons: sortedIcons
   };
 
   figma.ui.postMessage({
