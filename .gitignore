@@ -10,6 +10,7 @@ yarn-error.log*
 *.d.ts
 *.d.ts.map
 ui.html
+icons-export.json
 
 # IDE
 .vscode/

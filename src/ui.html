@@ -51,10 +51,6 @@
       margin-top: 20px;
       text-align: center;
     }
-    .status {
-      margin-top: 20px;
-      text-align: center;
-    }
   </style>
 </head>
 <body>
@@ -70,19 +66,9 @@
 
   <script>
     const exportBtn = document.getElementById('export-btn');
-    const statusDiv = document.getElementById('status');
     const buttonText = document.getElementById('button-text');
     const buttonProgress = document.getElementById('button-progress');
     
-    function showStatus(message, type) {
-      statusDiv.innerHTML = `<span class="spinner"></span>${message}`;
-      statusDiv.className = `status ${type}`;
-      statusDiv.style.display = 'block';
-    }
-    
-    function hideStatus() {
-      statusDiv.style.display = 'none';
-    }
     
     function updateButtonProgress(message) {
       buttonText.style.display = 'none';
@@ -100,7 +86,6 @@
     }
     
     exportBtn.addEventListener('click', () => {
-      hideStatus();
       updateButtonProgress('Starting export...');
       
       parent.postMessage({ pluginMessage: { type: 'export-icons' } }, '*');
@@ -136,7 +121,7 @@
         resetButton();
         isDownloading = false;
       } else if (msg.type === 'error') {
-        showStatus(msg.message, 'error');
+        console.error('Export error:', msg.message);
         resetButton();
         isDownloading = false;
       } else if (msg.type === 'status') {
@@ -157,7 +142,6 @@
     // Download all files as individual files with delay
     async function downloadAsZip() {
       console.log(`Downloading ${pendingFiles.length} files individually`);
-      showStatus(`Downloading ${pendingFiles.length} files...`, 'info');
       
       try {
         // Download each file with a delay to avoid browser blocking
@@ -172,19 +156,14 @@
           // Download the file
           downloadFile(file.content, file.filename, file.mimeType);
           console.log(`Downloaded: ${file.filename}`);
-          
-          // Update progress
-          showStatus(`Downloaded ${i + 1}/${pendingFiles.length} files...`, 'info');
         }
         
-        showStatus(`Successfully downloaded all ${pendingFiles.length} files!`, 'success');
         console.log(`Downloaded all ${pendingFiles.length} files`);
         
         // Clear pending files
         pendingFiles = [];
       } catch (error) {
         console.error('Failed to download files:', error);
-        showStatus('Error downloading files', 'error');
       }
     }
   </script>
