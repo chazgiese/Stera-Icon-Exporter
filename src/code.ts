@@ -260,7 +260,7 @@ function deduplicateSVG(svgString: string): string {
       console.log(`[deduplicateSVG] removed ${removed} duplicate element(s)`);
     }
 
-    return `${svgOpen}\n${out.join('\n')}\n${svgClose}`;
+    return `${svgOpen}${out.join('')}${svgClose}`;
   } catch (err) {
     console.error('[deduplicateSVG] error', err);
     return svgString;
@@ -272,6 +272,22 @@ function deduplicateSVG(svgString: string): string {
  */
 function validateSVG(svgString: string, variant: string): ValidationResult {
   const errors: string[] = [];
+  
+  // Check basic SVG structure
+  if (!svgString.trim().startsWith('<svg')) {
+    errors.push('SVG does not start with <svg tag');
+  }
+  
+  if (!svgString.trim().endsWith('</svg>')) {
+    errors.push('SVG does not end with </svg> tag');
+  }
+  
+  // Check for proper opening and closing tag balance
+  const openTags = (svgString.match(/<svg[^>]*>/gi) || []).length;
+  const closeTags = (svgString.match(/<\/svg>/gi) || []).length;
+  if (openTags !== closeTags) {
+    errors.push(`SVG tag mismatch: ${openTags} opening tags, ${closeTags} closing tags`);
+  }
   
   // Check viewBox
   if (!svgString.includes(`viewBox="${REQUIRED_VIEWBOX}"`)) {
@@ -341,7 +357,7 @@ function groupComponentsByBaseName(components: ComponentNode[]): { [baseName: st
   const groups: { [baseName: string]: ComponentNode[] } = {};
   
   components.forEach(component => {
-    const name = (component as any).name;
+    const name = component.name;
     
     // Extract base name (everything before the last slash or variant indicator)
     let baseName = name;
@@ -401,7 +417,7 @@ function checkForDuplicateNames(componentSets: any[], components: ComponentNode[
   // Group individual components by base name (same logic as in groupComponentsByBaseName)
   const individualGroups: { [baseName: string]: ComponentNode[] } = {};
   individualComponents.forEach(component => {
-    const name = (component as any).name;
+    const name = component.name;
     
     // Extract base name (everything before the last slash or variant indicator)
     let baseName = name;
@@ -508,14 +524,14 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
   
   for (const component of components) {
     try {
-      const fullName = (component as any).name;
+      const fullName = component.name;
       
       // For component sets, try to get variant name from component properties
       let variantName = 'default';
       
       // Check if this component has variant properties
-      if ((component as any).variantProperties) {
-        const variantProps = (component as any).variantProperties;
+      if (component.variantProperties) {
+        const variantProps = component.variantProperties;
         
         // Look for common variant property names
         if (variantProps.Variant) {
@@ -559,32 +575,27 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
         console.warn(`Variant "${variantName}" is not in allowed variants: ${ALLOWED_VARIANTS.join(', ')}`);
       }
       
-      const svgData = await (component as any).exportAsync({ format: 'SVG' });
+      // Use SVG_STRING format for better performance and simpler handling
+      const svgString = await component.exportAsync({ 
+        format: 'SVG_STRING',
+        svgOutlineText: true, // Render text as outlines for visual consistency
+        svgIdAttribute: false, // Don't include layer names as IDs to reduce file size
+        svgSimplifyStroke: true // Simplify strokes for better compatibility
+      });
       
       // Validate that we received SVG data
-      if (!svgData || svgData.length === 0) {
-        throw new Error(`No SVG data received for component ${(component as any).name}`);
+      if (!svgString || svgString.length === 0) {
+        throw new Error(`No SVG data received for component ${component.name}`);
       }
-      
-      // Convert Uint8Array to string safely, handling large SVGs
-      // Use chunked approach to avoid call stack overflow with large SVGs
-      const chunks: string[] = [];
-      const chunkSize = 8192; // Process in smaller chunks to avoid call stack overflow
-      
-      for (let i = 0; i < svgData.length; i += chunkSize) {
-        const chunk = svgData.slice(i, i + chunkSize);
-        chunks.push(String.fromCharCode.apply(null, Array.from(chunk)));
-      }
-      const svgString = chunks.join('');
       
       // Validate that the SVG string is not empty and contains basic SVG structure
       if (!svgString || !svgString.trim().startsWith('<svg')) {
-        throw new Error(`Invalid SVG data received for component ${(component as any).name}`);
+        throw new Error(`Invalid SVG data received for component ${component.name}`);
       }
       
       // Validate that the SVG is properly closed
       if (!svgString.trim().endsWith('</svg>')) {
-        console.warn(`SVG for component ${(component as any).name} may be incomplete - missing closing tag`);
+        console.warn(`SVG for component ${component.name} may be incomplete - missing closing tag`);
       }
       
       // Deduplicate the SVG to remove any duplicate shapes
@@ -612,7 +623,7 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
         hash: hash
       });
     } catch (error) {
-      console.error(`Failed to export variant ${(component as any).name}:`, error);
+      console.error(`Failed to export variant ${component.name}:`, error);
     }
   }
   
