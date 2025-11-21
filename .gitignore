@@ -13,6 +13,7 @@ ui.html
 icons-export.json
 
 # IDE
+.cursor/
 .vscode/
 .idea/
 *.swp
