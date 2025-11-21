@@ -37,7 +37,6 @@ const SCHEMA_VERSION = "1.0.0";
 const ALLOWED_VARIANTS = ["Bold", "Fill", "Filltone", "Linetone", "Regular"];
 const TONE_VARIANTS = ["Filltone", "Linetone"];
 const REQUIRED_VIEWBOX = "0 0 24 24";
-const TONE_OPACITY = "0.32";
 
 // Shape tags that are considered for deduplication
 const SHAPE_TAGS = new Set([
@@ -99,6 +98,18 @@ function processTags(tagsString: string): string[] {
 }
 
 /**
+ * Allows the plugin to periodically yield so the Figma UI stays responsive
+ * during long-running exports.
+ */
+function yieldToFigma(ms: number = 0): Promise<void> {
+  return new Promise((resolve) => {
+    // setTimeout is supported in the Figma plugin sandbox and lets us
+    // cooperatively yield without changing export results.
+    setTimeout(() => resolve(), ms);
+  });
+}
+
+/**
  * Normalizes SVG string for consistent output and hashing
  */
 function normalizeSVG(svgString: string): string {
@@ -145,6 +156,7 @@ function normalizeSVG(svgString: string): string {
  * Works in Figma plugin (no DOM).
  */
 function deduplicateSVG(svgString: string): string {
+  const DEBUG_DEDUP = false;
   try {
     const svgMatch = svgString.match(/^<svg\b[^>]*>/i);
     if (!svgMatch) return svgString;
@@ -256,7 +268,7 @@ function deduplicateSVG(svgString: string): string {
       out.push(m[0]);
     }
 
-    if (removed > 0) {
+    if (DEBUG_DEDUP && removed > 0) {
       console.log(`[deduplicateSVG] removed ${removed} duplicate element(s)`);
     }
 
@@ -294,13 +306,8 @@ function validateSVG(svgString: string, variant: string): ValidationResult {
     errors.push(`Missing or incorrect viewBox. Expected: "${REQUIRED_VIEWBOX}"`);
   }
   
-  // Check tone variant requirements
-  if (TONE_VARIANTS.includes(variant)) {
-    if (!svgString.includes(`opacity="${TONE_OPACITY}"`)) {
-      errors.push(`Tone variant "${variant}" must include opacity="${TONE_OPACITY}"`);
-    }
-  } else {
-    // Non-tone variants should not have fixed hex colors
+  // Non-tone variants should not have fixed hex colors
+  if (!TONE_VARIANTS.includes(variant)) {
     const hexColorRegex = /fill\s*=\s*["']#[0-9a-fA-F]{3,6}["']/g;
     if (hexColorRegex.test(svgString)) {
       errors.push(`Non-tone variant "${variant}" should not contain fixed hex colors (fill="#...")`);
@@ -522,7 +529,8 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
   // Process each variant
   const variants: IconVariant[] = [];
   
-  for (const component of components) {
+  for (let i = 0; i < components.length; i++) {
+    const component = components[i];
     try {
       const fullName = component.name;
       
@@ -624,6 +632,11 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
       });
     } catch (error) {
       console.error(`Failed to export variant ${component.name}:`, error);
+    }
+
+    // Periodically yield to keep things responsive when there are many variants
+    if ((i + 1) % 5 === 0) {
+      await yieldToFigma();
     }
   }
   
@@ -730,7 +743,8 @@ async function exportIcons(): Promise<void> {
     message: `Processing ${componentSets.length} component sets...` 
   });
   
-  for (const componentSet of componentSets) {
+  for (let index = 0; index < componentSets.length; index++) {
+    const componentSet = componentSets[index];
     try {
       const setName = (componentSet as any).name;
       
@@ -765,6 +779,11 @@ async function exportIcons(): Promise<void> {
     } catch (error) {
       console.error(`Failed to process component set ${(componentSet as any).name}:`, error);
     }
+
+    // Yield every few component sets to keep the Figma tab responsive
+    if ((index + 1) % 3 === 0) {
+      await yieldToFigma();
+    }
   }
 
   // Process individual components (not part of component sets)
@@ -794,7 +813,10 @@ async function exportIcons(): Promise<void> {
     const totalGroups = Object.keys(iconGroups).length;
     let individualProcessedCount = 0;
 
-    for (const [baseName, componentGroup] of Object.entries(iconGroups)) {
+    const entries = Object.entries(iconGroups);
+
+    for (let i = 0; i < entries.length; i++) {
+      const [baseName, componentGroup] = entries[i];
       try {
         
         // Update status for current group being processed
@@ -820,6 +842,12 @@ async function exportIcons(): Promise<void> {
       } catch (error) {
         console.error(`Failed to process icon group ${baseName}:`, error);
         // Continue with other groups even if one fails
+      }
+
+      // Yield periodically so large numbers of individual components
+      // don't lock up the Figma UI.
+      if ((i + 1) % 5 === 0) {
+        await yieldToFigma();
       }
     }
   }

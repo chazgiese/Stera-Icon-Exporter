@@ -50,6 +50,8 @@
     .description {
       margin-top: 20px;
       text-align: center;
+      max-width: 240px;
+      word-wrap: break-word;
     }
   </style>
 </head>
@@ -57,36 +59,52 @@
   <button id="export-btn" class="button">
     <div class="button-content">
       <span id="button-text">Export Icons</span>
-      <span id="button-progress" class="progress-text" style="display: none;"></span>
     </div>
   </button>
-  <div class="description">
+  <div id="description-text" class="description">
     This plugin will export all components from the current page as a single JSON file with embedded SVG and metadata.
   </div>
 
   <script>
     const exportBtn = document.getElementById('export-btn');
     const buttonText = document.getElementById('button-text');
-    const buttonProgress = document.getElementById('button-progress');
+    const descriptionEl = document.getElementById('description-text');
+    const originalDescriptionText = 'This plugin will export all components from the current page as a single JSON file with embedded SVG and metadata.';
+    const originalButtonText = buttonText ? buttonText.textContent : 'Export Icons';
     
     
-    function updateButtonProgress(message) {
-      buttonText.style.display = 'none';
-      buttonProgress.style.display = 'inline';
-      buttonProgress.textContent = message;
+    function setButtonExportingState() {
+      if (buttonText) {
+        buttonText.textContent = 'Exporting icons...';
+      }
       exportBtn.classList.add('processing');
       exportBtn.disabled = true;
     }
+
+    function updateDescription(message) {
+      if (descriptionEl) {
+        descriptionEl.textContent = message;
+      }
+    }
+
+    function resetDescription() {
+      if (descriptionEl) {
+        descriptionEl.textContent = originalDescriptionText;
+      }
+    }
     
     function resetButton() {
-      buttonText.style.display = 'inline';
-      buttonProgress.style.display = 'none';
+      if (buttonText) {
+        buttonText.textContent = originalButtonText || 'Export Icons';
+      }
       exportBtn.classList.remove('processing');
       exportBtn.disabled = false;
+      resetDescription();
     }
     
     exportBtn.addEventListener('click', () => {
-      updateButtonProgress('Starting export...');
+      updateDescription('Preparing export...');
+      setButtonExportingState();
       
       parent.postMessage({ pluginMessage: { type: 'export-icons' } }, '*');
     });
@@ -113,7 +131,11 @@
 
     // Listen for messages from the plugin
     window.onmessage = (event) => {
-      const msg = event.data.pluginMessage;
+      const msg = event.data && event.data.pluginMessage;
+      if (!msg) {
+        return; // Ignore non-plugin messages
+      }
+
       console.log('UI received message:', msg.type, msg);
       
       if (msg.type === 'success') {
@@ -125,11 +147,11 @@
         resetButton();
         isDownloading = false;
       } else if (msg.type === 'status') {
-        // Update button with status message
-        updateButtonProgress(msg.message);
+        // Keep button in exporting state; only update description text
+        updateDescription(msg.message);
       } else if (msg.type === 'progress') {
-        // Update button with progress message
-        updateButtonProgress(msg.message);
+        // Keep button in exporting state; only update description text
+        updateDescription(msg.message);
       } else if (msg.type === 'save-icons-export') {
         // Download the single JSON file with all icons
         console.log('Downloading icons export JSON file');
