@@ -87,9 +87,10 @@ function deriveVariantName(component: ComponentNode, baseName: string): string {
   const fullName = component.name;
   for (const separator of NAME_SEPARATORS) {
     if (fullName.includes(separator)) {
-      const [, variant = 'default'] = fullName.split(separator);
-      if (variant.trim().length > 0) {
-        return variant.trim();
+      const parts = fullName.split(separator);
+      const variant = parts[parts.length - 1]?.trim();
+      if (variant && variant.length > 0) {
+        return variant;
       }
     }
   }
