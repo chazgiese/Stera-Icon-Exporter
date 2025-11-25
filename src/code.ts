@@ -44,9 +44,108 @@ const SHAPE_TAGS = new Set([
 ]);
 
 // Attributes that suggest styling, references, or hooks and should not be deduplicated
-const RISKY_ATTRIBUTES = [
+const RISKY_ATTRIBUTES = new Set([
   'id', 'class', 'style', 'filter', 'mask', 'clip-path', 'clipPath', 'transform'
-];
+]);
+
+const EXPORT_CONCURRENCY = 4;
+const VARIANT_PROP_PRIORITY = ['Variant', 'Style', 'Type'];
+const YIELD_FREQUENCY = 5;
+
+const NAME_SEPARATORS = ['/', '=', ' - '];
+
+// ============================================================================
+// HELPER UTILITIES
+// ============================================================================
+
+function extractBaseName(rawName: string): string {
+  for (const separator of NAME_SEPARATORS) {
+    if (rawName.includes(separator)) {
+      return rawName.split(separator)[0].trim();
+    }
+  }
+  return rawName.trim();
+}
+
+function deriveVariantName(component: ComponentNode, baseName: string): string {
+  const variantProps = component.variantProperties;
+  if (variantProps) {
+    for (const key of VARIANT_PROP_PRIORITY) {
+      if (variantProps[key]) {
+        return variantProps[key];
+      }
+    }
+    const propNames = Object.keys(variantProps);
+    if (propNames.length > 0) {
+      const firstPropName = propNames[0];
+      if (variantProps[firstPropName]) {
+        return variantProps[firstPropName];
+      }
+    }
+  }
+
+  const fullName = component.name;
+  for (const separator of NAME_SEPARATORS) {
+    if (fullName.includes(separator)) {
+      const [, variant = 'default'] = fullName.split(separator);
+      if (variant.trim().length > 0) {
+        return variant.trim();
+      }
+    }
+  }
+
+  if (fullName !== baseName) {
+    const diff = fullName.replace(baseName, '').replace(/^[-_=\/\s]+/, '').trim();
+    if (diff.length > 0) {
+      return diff;
+    }
+  }
+
+  const parts = fullName.split(/[-_\/=]/);
+  if (parts.length > 1) {
+    return parts[parts.length - 1].trim() || 'default';
+  }
+
+  return 'default';
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  iterator: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const concurrency = Math.max(1, Math.min(limit, items.length));
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++;
+      results[currentIndex] = await iterator(items[currentIndex], currentIndex);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+function collectComponentSetChildIds(componentSets: any[]): Set<string> {
+  const ids = new Set<string>();
+  for (const componentSet of componentSets) {
+    if ('children' in componentSet) {
+      for (const child of componentSet.children) {
+        if (child.type === 'COMPONENT') {
+          ids.add((child as any).id);
+        }
+      }
+    }
+  }
+  return ids;
+}
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -215,7 +314,11 @@ function deduplicateSVG(svgString: string): string {
       const val = (k: string, def = '') => (a[k] || def).trim();
 
       // Anything that suggests styling, references, or hooks → keep
-      if (RISKY_ATTRIBUTES.some(k => a[k] != null)) return false;
+      for (const riskyAttr of RISKY_ATTRIBUTES) {
+        if (a[riskyAttr]) {
+          return false;
+        }
+      }
       if (Object.values(a).some(v => /url\(#/.test(v))) return false;
 
       // Opacity guards
@@ -364,20 +467,7 @@ function groupComponentsByBaseName(components: ComponentNode[]): { [baseName: st
   const groups: { [baseName: string]: ComponentNode[] } = {};
   
   components.forEach(component => {
-    const name = component.name;
-    
-    // Extract base name (everything before the last slash or variant indicator)
-    let baseName = name;
-    
-    // Handle variant naming patterns like "icon-name/variant" or "icon-name=variant"
-    if (name.includes('/')) {
-      baseName = name.split('/')[0];
-    } else if (name.includes('=')) {
-      baseName = name.split('=')[0];
-    } else if (name.includes(' - ')) {
-      baseName = name.split(' - ')[0];
-    }
-    
+    const baseName = extractBaseName(component.name);
     if (!groups[baseName]) {
       groups[baseName] = [];
     }
@@ -391,72 +481,29 @@ function groupComponentsByBaseName(components: ComponentNode[]): { [baseName: st
  * Checks for duplicate icon names across component sets and individual components
  * Returns an array of duplicate names found
  */
-function checkForDuplicateNames(componentSets: any[], components: ComponentNode[]): string[] {
-  const nameCounts: { [key: string]: number } = {};
-  const duplicateNames: string[] = [];
-  
-  // Count component set names
-  componentSets.forEach(componentSet => {
-    const setName = (componentSet as any).name;
-    if (setName) {
-      nameCounts[setName] = (nameCounts[setName] || 0) + 1;
-    }
-  });
-  
-  // Count individual component base names (grouped by base name like component sets)
-  const individualComponents = components.filter(comp => {
-    // Check if this component is already part of a component set
-    let isPartOfComponentSet = false;
-    for (const componentSet of componentSets) {
-      if ('children' in componentSet) {
-        for (const child of componentSet.children) {
-          if (child.type === 'COMPONENT' && (child as any).id === (comp as any).id) {
-            isPartOfComponentSet = true;
-            break;
-          }
-        }
-      }
-      if (isPartOfComponentSet) break;
-    }
-    return !isPartOfComponentSet;
-  });
-  
-  // Group individual components by base name (same logic as in groupComponentsByBaseName)
-  const individualGroups: { [baseName: string]: ComponentNode[] } = {};
-  individualComponents.forEach(component => {
-    const name = component.name;
-    
-    // Extract base name (everything before the last slash or variant indicator)
-    let baseName = name;
-    
-    // Handle variant naming patterns like "icon-name/variant" or "icon-name=variant"
-    if (name.includes('/')) {
-      baseName = name.split('/')[0];
-    } else if (name.includes('=')) {
-      baseName = name.split('=')[0];
-    } else if (name.includes(' - ')) {
-      baseName = name.split(' - ')[0];
-    }
-    
-    if (!individualGroups[baseName]) {
-      individualGroups[baseName] = [];
-    }
-    individualGroups[baseName].push(component);
-  });
-  
-  // Count individual component group names
-  Object.keys(individualGroups).forEach(baseName => {
-    nameCounts[baseName] = (nameCounts[baseName] || 0) + 1;
-  });
-  
-  // Find duplicates
-  Object.entries(nameCounts).forEach(([name, count]) => {
-    if (count > 1) {
-      duplicateNames.push(name);
-    }
-  });
-  
-  return duplicateNames;
+function checkForDuplicateNames(
+  componentSets: any[],
+  components: ComponentNode[],
+  precomputedChildIds?: Set<string>
+): string[] {
+  const nameCounts = new Map<string, number>();
+  const bumpCount = (rawName?: string) => {
+    if (!rawName) return;
+    const baseName = extractBaseName(rawName);
+    nameCounts.set(baseName, (nameCounts.get(baseName) || 0) + 1);
+  };
+
+  componentSets.forEach(componentSet => bumpCount((componentSet as any).name));
+
+  const componentSetChildIds = precomputedChildIds ?? collectComponentSetChildIds(componentSets);
+
+  components
+    .filter(comp => !componentSetChildIds.has((comp as any).id))
+    .forEach(component => bumpCount(component.name));
+
+  return Array.from(nameCounts.entries())
+    .filter(([, count]) => count > 1)
+    .map(([name]) => name);
 }
 
 /**
@@ -526,119 +573,68 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
   
   const tags = processTags(tagsString);
   
-  // Process each variant
-  const variants: IconVariant[] = [];
-  
-  for (let i = 0; i < components.length; i++) {
-    const component = components[i];
-    try {
-      const fullName = component.name;
-      
-      // For component sets, try to get variant name from component properties
-      let variantName = 'default';
-      
-      // Check if this component has variant properties
-      if (component.variantProperties) {
-        const variantProps = component.variantProperties;
+  const variantResults = await mapWithConcurrency(
+    components,
+    EXPORT_CONCURRENCY,
+    async (component, index) => {
+      try {
+        const variantName = deriveVariantName(component, baseName);
         
-        // Look for common variant property names
-        if (variantProps.Variant) {
-          variantName = variantProps.Variant;
-        } else if (variantProps.Style) {
-          variantName = variantProps.Style;
-        } else if (variantProps.Type) {
-          variantName = variantProps.Type;
-        } else {
-          // Use the first property value as variant name
-          const propNames = Object.keys(variantProps);
-          if (propNames.length > 0) {
-            variantName = variantProps[propNames[0]];
-          }
-        }
-      } else {
-        // Fallback to parsing component name
-        if (fullName.includes('/')) {
-          variantName = fullName.split('/')[1];
-        } else if (fullName.includes('=')) {
-          variantName = fullName.split('=')[1];
-        } else if (fullName.includes(' - ')) {
-          variantName = fullName.split(' - ')[1];
-        } else if (fullName !== baseName) {
-          // If the full name is different from base name, use the difference as variant
-          variantName = fullName.replace(baseName, '').replace(/^[-_\/=]/, '');
+        if (!ALLOWED_VARIANTS.includes(variantName)) {
+          console.warn(`Variant "${variantName}" is not in allowed variants: ${ALLOWED_VARIANTS.join(', ')}`);
         }
         
-        // If we still have the full name, try to extract variant from the end
-        if (variantName === fullName && fullName !== baseName) {
-          // Try to get the last part after common separators
-          const parts = fullName.split(/[-_\/=]/);
-          if (parts.length > 1) {
-            variantName = parts[parts.length - 1];
-          }
+        const svgString = await component.exportAsync({ 
+          format: 'SVG_STRING',
+          svgOutlineText: true,
+          svgIdAttribute: false,
+          svgSimplifyStroke: true
+        });
+        
+        if (!svgString || svgString.length === 0) {
+          throw new Error(`No SVG data received for component ${component.name}`);
         }
+        
+        const trimmedSvg = svgString.trim();
+        if (!trimmedSvg.startsWith('<svg')) {
+          throw new Error(`Invalid SVG data received for component ${component.name}`);
+        }
+        
+        if (!trimmedSvg.endsWith('</svg>')) {
+          console.warn(`SVG for component ${component.name} may be incomplete - missing closing tag`);
+        }
+        
+        const deduplicatedSvg = deduplicateSVG(trimmedSvg);
+        const normalizedSvg = normalizeSVG(deduplicatedSvg);
+        const validation = validateSVG(normalizedSvg, variantName);
+        if (!validation.isValid) {
+          console.warn(`SVG validation failed for variant "${variantName}":`, validation.errors);
+        }
+        
+        const hash = generateHash(normalizedSvg);
+        if (!hash) {
+          console.error(`Failed to generate hash for variant "${variantName}"`);
+        }
+        
+        if ((index + 1) % YIELD_FREQUENCY === 0) {
+          await yieldToFigma();
+        }
+        
+        return {
+          variant: variantName,
+          svg: normalizedSvg,
+          hash
+        } as IconVariant;
+      } catch (error) {
+        console.error(`Failed to export variant ${component.name}:`, error);
+        return null;
       }
-      
-      // Validate variant name
-      if (!ALLOWED_VARIANTS.includes(variantName)) {
-        console.warn(`Variant "${variantName}" is not in allowed variants: ${ALLOWED_VARIANTS.join(', ')}`);
-      }
-      
-      // Use SVG_STRING format for better performance and simpler handling
-      const svgString = await component.exportAsync({ 
-        format: 'SVG_STRING',
-        svgOutlineText: true, // Render text as outlines for visual consistency
-        svgIdAttribute: false, // Don't include layer names as IDs to reduce file size
-        svgSimplifyStroke: true // Simplify strokes for better compatibility
-      });
-      
-      // Validate that we received SVG data
-      if (!svgString || svgString.length === 0) {
-        throw new Error(`No SVG data received for component ${component.name}`);
-      }
-      
-      // Validate that the SVG string is not empty and contains basic SVG structure
-      if (!svgString || !svgString.trim().startsWith('<svg')) {
-        throw new Error(`Invalid SVG data received for component ${component.name}`);
-      }
-      
-      // Validate that the SVG is properly closed
-      if (!svgString.trim().endsWith('</svg>')) {
-        console.warn(`SVG for component ${component.name} may be incomplete - missing closing tag`);
-      }
-      
-      // Deduplicate the SVG to remove any duplicate shapes
-      const deduplicatedSvg = deduplicateSVG(svgString);
-      
-      // Normalize the SVG for consistent output
-      const normalizedSvg = normalizeSVG(deduplicatedSvg);
-      
-      // Validate the SVG
-      const validation = validateSVG(normalizedSvg, variantName);
-      if (!validation.isValid) {
-        console.warn(`SVG validation failed for variant "${variantName}":`, validation.errors);
-      }
-      
-      // Generate hash for the normalized SVG
-      const hash = generateHash(normalizedSvg);
-      
-      if (!hash) {
-        console.error(`Failed to generate hash for variant "${variantName}"`);
-      }
-      
-      variants.push({
-        variant: variantName,
-        svg: normalizedSvg,
-        hash: hash
-      });
-    } catch (error) {
-      console.error(`Failed to export variant ${component.name}:`, error);
     }
+  );
 
-    // Periodically yield to keep things responsive when there are many variants
-    if ((i + 1) % 5 === 0) {
-      await yieldToFigma();
-    }
-  }
+  const variants: IconVariant[] = variantResults.filter(
+    (result): result is IconVariant => Boolean(result)
+  );
   
   // Sort variants alphabetically by variant name
   variants.sort((a, b) => a.variant.localeCompare(b.variant));
@@ -712,8 +708,10 @@ async function exportIcons(): Promise<void> {
     throw new Error(`No components or component sets found on the current page "${currentPage.name}". Please add some icon components to this page.`);
   }
 
+  const componentSetChildIds = collectComponentSetChildIds(componentSets);
+
   // Check for duplicate icon names before processing
-  const duplicateNames = checkForDuplicateNames(componentSets, components);
+  const duplicateNames = checkForDuplicateNames(componentSets, components, componentSetChildIds);
   if (duplicateNames.length > 0) {
     const isPlural = duplicateNames.length > 1;
     const duplicateLabel = isPlural ? 'Duplicates' : 'Duplicate';
@@ -787,20 +785,8 @@ async function exportIcons(): Promise<void> {
   }
 
   // Process individual components (not part of component sets)
-  // First, collect all component IDs that are already part of component sets
-  const processedComponentIds = new Set<string>();
-  for (const componentSet of componentSets) {
-    if ('children' in componentSet) {
-      for (const child of componentSet.children) {
-        if (child.type === 'COMPONENT') {
-          processedComponentIds.add((child as any).id);
-        }
-      }
-    }
-  }
-  
   // Filter out components that are already part of component sets
-  const individualComponents = components.filter(comp => !processedComponentIds.has((comp as any).id));
+  const individualComponents = components.filter(comp => !componentSetChildIds.has((comp as any).id));
   
   if (individualComponents.length > 0) {
     figma.ui.postMessage({ 
