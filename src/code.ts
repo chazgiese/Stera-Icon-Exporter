@@ -6,7 +6,10 @@
 // ============================================================================
 
 interface IconVariant {
-  variant: string;
+  variant: {
+    weight: string;  // "Regular" | "Bold" | "Fill"
+    duotone: boolean;
+  };
   svg: string;
   hash: string;
 }
@@ -33,9 +36,9 @@ interface ValidationResult {
 // CONSTANTS
 // ============================================================================
 
-const SCHEMA_VERSION = "1.0.0";
-const ALLOWED_VARIANTS = ["Bold", "Fill", "Filltone", "Linetone", "Regular"];
-const TONE_VARIANTS = ["Filltone", "Linetone"];
+const SCHEMA_VERSION = "2.0.0";
+const ALLOWED_WEIGHTS = ["Regular", "Bold", "Fill"];
+const DUOTONE_VALUES = [false, true];
 const REQUIRED_VIEWBOX = "0 0 24 24";
 
 // Shape tags that are considered for deduplication
@@ -49,7 +52,7 @@ const RISKY_ATTRIBUTES = new Set([
 ]);
 
 const EXPORT_CONCURRENCY = 4;
-const VARIANT_PROP_PRIORITY = ['Variant', 'Style', 'Type'];
+const VARIANT_PROP_PRIORITY = ['Weight', 'Duotone', 'Variant', 'Style', 'Type'];
 const YIELD_FREQUENCY = 5;
 
 const NAME_SEPARATORS = ['/', '=', ' - '];
@@ -67,47 +70,96 @@ function extractBaseName(rawName: string): string {
   return rawName.trim();
 }
 
-function deriveVariantName(component: ComponentNode, baseName: string): string {
+function deriveVariant(component: ComponentNode, baseName: string): { weight: string; duotone: boolean } {
   const variantProps = component.variantProperties;
+  let weight = "Regular"; // default
+  let duotone = false; // default
+
+  // Helper to normalize property names (case-insensitive)
+  const getProp = (props: Record<string, string> | null, propName: string): string | null => {
+    if (!props) return null;
+    const lowerPropName = propName.toLowerCase();
+    for (const key of Object.keys(props)) {
+      if (key.toLowerCase() === lowerPropName) {
+        return props[key];
+      }
+    }
+    return null;
+  };
+
+  // Extract weight from variant properties
   if (variantProps) {
-    for (const key of VARIANT_PROP_PRIORITY) {
-      if (variantProps[key]) {
-        return variantProps[key];
+    const weightValue = getProp(variantProps, 'Weight') || getProp(variantProps, 'Style') || getProp(variantProps, 'Variant');
+    if (weightValue) {
+      const normalizedWeight = weightValue.trim();
+      // Normalize weight values (case-insensitive)
+      if (ALLOWED_WEIGHTS.some(w => w.toLowerCase() === normalizedWeight.toLowerCase())) {
+        weight = ALLOWED_WEIGHTS.find(w => w.toLowerCase() === normalizedWeight.toLowerCase()) || "Regular";
+      } else {
+        // Try to map legacy variant names to weights
+        const lowerValue = normalizedWeight.toLowerCase();
+        if (lowerValue.includes('bold')) {
+          weight = "Bold";
+        } else if (lowerValue.includes('fill')) {
+          weight = "Fill";
+        } else if (lowerValue.includes('regular') || lowerValue.includes('line')) {
+          weight = "Regular";
+        }
       }
     }
-    const propNames = Object.keys(variantProps);
-    if (propNames.length > 0) {
-      const firstPropName = propNames[0];
-      if (variantProps[firstPropName]) {
-        return variantProps[firstPropName];
+
+    // Extract duotone from variant properties
+    const duotoneValue = getProp(variantProps, 'Duotone');
+    if (duotoneValue) {
+      const normalizedDuotone = duotoneValue.toString().trim().toLowerCase();
+      duotone = normalizedDuotone === 'true' || normalizedDuotone === 'yes' || normalizedDuotone === '1';
+    }
+  }
+
+  // Fallback: Try to extract from component name if variant properties didn't provide both values
+  if (!variantProps || (!getProp(variantProps, 'Weight') && !getProp(variantProps, 'Duotone'))) {
+    const fullName = component.name;
+    
+    // Check for duotone in name
+    const nameLower = fullName.toLowerCase();
+    if (nameLower.includes('duotone') || nameLower.includes('tone')) {
+      duotone = true;
+    }
+
+    // Check for weight in name
+    if (nameLower.includes('bold')) {
+      weight = "Bold";
+    } else if (nameLower.includes('fill')) {
+      weight = "Fill";
+    } else if (nameLower.includes('regular') || nameLower.includes('line')) {
+      weight = "Regular";
+    }
+
+    // Try parsing from separators
+    for (const separator of NAME_SEPARATORS) {
+      if (fullName.includes(separator)) {
+        const parts = fullName.split(separator);
+        const lastPart = parts[parts.length - 1]?.trim().toLowerCase() || '';
+        
+        // Check for weight
+        if (lastPart.includes('bold')) {
+          weight = "Bold";
+        } else if (lastPart.includes('fill')) {
+          weight = "Fill";
+        } else if (lastPart.includes('regular') || lastPart.includes('line')) {
+          weight = "Regular";
+        }
+        
+        // Check for duotone
+        if (lastPart.includes('duotone') || lastPart.includes('tone')) {
+          duotone = true;
+        }
+        break;
       }
     }
   }
 
-  const fullName = component.name;
-  for (const separator of NAME_SEPARATORS) {
-    if (fullName.includes(separator)) {
-      const parts = fullName.split(separator);
-      const variant = parts[parts.length - 1]?.trim();
-      if (variant && variant.length > 0) {
-        return variant;
-      }
-    }
-  }
-
-  if (fullName !== baseName) {
-    const diff = fullName.replace(baseName, '').replace(/^[-_=\/\s]+/, '').trim();
-    if (diff.length > 0) {
-      return diff;
-    }
-  }
-
-  const parts = fullName.split(/[-_\/=]/);
-  if (parts.length > 1) {
-    return parts[parts.length - 1].trim() || 'default';
-  }
-
-  return 'default';
+  return { weight, duotone };
 }
 
 async function mapWithConcurrency<T, R>(
@@ -386,7 +438,7 @@ function deduplicateSVG(svgString: string): string {
 /**
  * Validates SVG content for tone variants and other requirements
  */
-function validateSVG(svgString: string, variant: string): ValidationResult {
+function validateSVG(svgString: string, variant: { weight: string; duotone: boolean }): ValidationResult {
   const errors: string[] = [];
   
   // Check basic SVG structure
@@ -410,11 +462,11 @@ function validateSVG(svgString: string, variant: string): ValidationResult {
     errors.push(`Missing or incorrect viewBox. Expected: "${REQUIRED_VIEWBOX}"`);
   }
   
-  // Non-tone variants should not have fixed hex colors
-  if (!TONE_VARIANTS.includes(variant)) {
+  // Non-duotone variants should not have fixed hex colors
+  if (!variant.duotone) {
     const hexColorRegex = /fill\s*=\s*["']#[0-9a-fA-F]{3,6}["']/g;
     if (hexColorRegex.test(svgString)) {
-      errors.push(`Non-tone variant "${variant}" should not contain fixed hex colors (fill="#...")`);
+      errors.push(`Non-duotone variant (weight: "${variant.weight}", duotone: ${variant.duotone}) should not contain fixed hex colors (fill="#...")`);
     }
   }
   
@@ -496,7 +548,7 @@ function checkForDuplicateNames(
 
   componentSets.forEach(componentSet => bumpCount((componentSet as any).name));
 
-  const componentSetChildIds = precomputedChildIds ?? collectComponentSetChildIds(componentSets);
+  const componentSetChildIds = precomputedChildIds !== undefined ? precomputedChildIds : collectComponentSetChildIds(componentSets);
 
   components
     .filter(comp => !componentSetChildIds.has((comp as any).id))
@@ -579,10 +631,10 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
     EXPORT_CONCURRENCY,
     async (component, index) => {
       try {
-        const variantName = deriveVariantName(component, baseName);
+        const variant = deriveVariant(component, baseName);
         
-        if (!ALLOWED_VARIANTS.includes(variantName)) {
-          console.warn(`Variant "${variantName}" is not in allowed variants: ${ALLOWED_VARIANTS.join(', ')}`);
+        if (!ALLOWED_WEIGHTS.includes(variant.weight)) {
+          console.warn(`Weight "${variant.weight}" is not in allowed weights: ${ALLOWED_WEIGHTS.join(', ')}`);
         }
         
         const svgString = await component.exportAsync({ 
@@ -607,14 +659,14 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
         
         const deduplicatedSvg = deduplicateSVG(trimmedSvg);
         const normalizedSvg = normalizeSVG(deduplicatedSvg);
-        const validation = validateSVG(normalizedSvg, variantName);
+        const validation = validateSVG(normalizedSvg, variant);
         if (!validation.isValid) {
-          console.warn(`SVG validation failed for variant "${variantName}":`, validation.errors);
+          console.warn(`SVG validation failed for variant (weight: "${variant.weight}", duotone: ${variant.duotone}):`, validation.errors);
         }
         
         const hash = generateHash(normalizedSvg);
         if (!hash) {
-          console.error(`Failed to generate hash for variant "${variantName}"`);
+          console.error(`Failed to generate hash for variant (weight: "${variant.weight}", duotone: ${variant.duotone})`);
         }
         
         if ((index + 1) % YIELD_FREQUENCY === 0) {
@@ -622,7 +674,7 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
         }
         
         return {
-          variant: variantName,
+          variant: variant,
           svg: normalizedSvg,
           hash
         } as IconVariant;
@@ -637,8 +689,14 @@ async function processIconGroup(baseName: string, components: ComponentNode[]): 
     (result): result is IconVariant => Boolean(result)
   );
   
-  // Sort variants alphabetically by variant name
-  variants.sort((a, b) => a.variant.localeCompare(b.variant));
+  // Sort variants: first by weight (Regular, Bold, Fill), then by duotone (false before true)
+  const weightOrder: { [key: string]: number } = { "Regular": 0, "Bold": 1, "Fill": 2 };
+  variants.sort((a, b) => {
+    const weightDiff = (weightOrder[a.variant.weight] ?? 999) - (weightOrder[b.variant.weight] ?? 999);
+    if (weightDiff !== 0) return weightDiff;
+    // If weights are the same, sort by duotone (false before true)
+    return (a.variant.duotone ? 1 : 0) - (b.variant.duotone ? 1 : 0);
+  });
   
   return {
     name: toKebabCase(baseName), // Convert to kebab-case

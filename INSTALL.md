@@ -27,29 +27,26 @@
 ## Usage
 
 1. **Prepare Your Figma File**:
-   - Create a page named exactly `/icons` (with the forward slash)
-   - Add your icon components to this page
-   - Name your components directly:
-     - Examples: `arrow-left`, `facebook`, `menu`
-   - Add descriptions with comma-separated tags:
-     - Example: "navigation, directional, left" for an arrow-left icon
+   - Navigate to the page with your icon components
+   - Ensure components are in component sets with:
+     - **Weight** property: `Regular`, `Bold`, or `Fill`
+     - **Duotone** property: `True` or `False`
+   - Name your component sets (e.g., `arrow-left`, `heart`)
+   - Add descriptions with comma-separated tags (optional)
 
 2. **Run the Plugin**:
-   - Open your Figma file with the `/icons` page
-   - Go to `Plugins` → `Icon Pipeline`
+   - Run the plugin in Figma
    - Click "Export Icons"
-   - The plugin will download SVG files and a metadata JSON file
+   - Download the `icons-export.json` file
 
 ## Output
 
-The plugin will download:
-- Individual SVG files for each icon component (in flat structure)
-- A `icons.meta.json` file containing all metadata
+The plugin generates a single `icons-export.json` file containing all icons with their variants, SVG data, and metadata.
 
 ## Troubleshooting
 
-- **"No /icons page found"**: Make sure you have a page named exactly `/icons` (case-sensitive)
-- **"No components found"**: Ensure your icon components are on the `/icons` page
+- **"No components found"**: Ensure your icon components are on the current page
+- **Component set structure**: Each component set should have Weight and Duotone variant properties
 - **Build errors**: Run `npm install` to ensure all dependencies are installed
 - **"Unable to load code" error**: Make sure to run `npm run build` after making changes to copy the UI file to the root directory
 
