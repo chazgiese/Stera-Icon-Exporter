@@ -78,6 +78,10 @@ const PRE_CHECK_METADATA = {
   fillsOnly: {
     checkId: 'fillsOnly',
     label: 'Checking for fills only (no strokes)...'
+  },
+  constraints: {
+    checkId: 'constraints',
+    label: 'Checking layer constraints...'
   }
 };
 
@@ -768,6 +772,107 @@ function runFillsOnlyCheck(components: ComponentNode[]): PreCheckResult {
 }
 
 /**
+ * Pre-check: Verify all direct children of component variants have constraints set to "Scale"
+ */
+function runConstraintsCheck(components: ComponentNode[]): PreCheckResult {
+  const offendingComponentSets = new Map<string, string>(); // name -> node ID
+  const MAX_ERRORS = 10;
+  
+  function hasInvalidConstraints(node: SceneNode): boolean {
+    if (!('constraints' in node)) return false;
+    
+    const constraints = (node as any).constraints;
+    if (!constraints) return false;
+    
+    // Check if both horizontal and vertical constraints are set to "SCALE"
+    return constraints.horizontal !== 'SCALE' || constraints.vertical !== 'SCALE';
+  }
+  
+  // Check all components
+  for (const component of components) {
+    const baseName = getComponentBaseName(component);
+    // Get the component set node if it exists, otherwise use the component itself
+    const targetNode = (component.parent && component.parent.type === 'COMPONENT_SET') 
+      ? component.parent 
+      : component;
+    const nodeId = (targetNode as any).id;
+    
+    // Check direct children only (not recursive)
+    if ('children' in component) {
+      for (const child of component.children) {
+        if (hasInvalidConstraints(child)) {
+          offendingComponentSets.set(baseName, nodeId);
+          break; // No need to check more children for this component
+        }
+      }
+    }
+  }
+  
+  if (offendingComponentSets.size === 0) {
+    return {
+      checkId: PRE_CHECK_METADATA.constraints.checkId,
+      label: 'All layer constraints set to "Scale"',
+      passed: true
+    };
+  }
+  
+  const componentSetList = Array.from(offendingComponentSets.entries()).slice(0, MAX_ERRORS);
+  const offendingComponents = componentSetList.map(([name, id]) => ({ name, id }));
+  const moreCount = offendingComponentSets.size > MAX_ERRORS ? `(and ${offendingComponentSets.size - MAX_ERRORS} more)` : '';
+  const errorMessage = `All direct children must have horizontal and vertical constraints set to "Scale". Component sets with errors: ${componentSetList.map(([name]) => name).join(', ')}${moreCount ? ' ' + moreCount : ''}`;
+  
+  return {
+    checkId: PRE_CHECK_METADATA.constraints.checkId,
+    label: 'Invalid constraints detected',
+    passed: false,
+    message: errorMessage,
+    offendingComponents
+  };
+}
+
+/**
+ * Fix constraints: Set all direct children to SCALE for both horizontal and vertical
+ */
+function fixConstraints(components: ComponentNode[]): { fixedComponents: Array<{ name: string, count: number }>, totalFixed: number } {
+  const fixedComponentMap = new Map<string, number>(); // name -> count of children fixed
+  let totalFixed = 0;
+  
+  for (const component of components) {
+    const baseName = getComponentBaseName(component);
+    let fixedCount = 0;
+    
+    if ('children' in component) {
+      for (const child of component.children) {
+        if ('constraints' in child) {
+          const constraints = (child as any).constraints;
+          
+          if (constraints && (constraints.horizontal !== 'SCALE' || constraints.vertical !== 'SCALE')) {
+            // Fix the constraints
+            (child as any).constraints = {
+              horizontal: 'SCALE',
+              vertical: 'SCALE'
+            };
+            fixedCount++;
+            totalFixed++;
+          }
+        }
+      }
+    }
+    
+    if (fixedCount > 0) {
+      fixedComponentMap.set(baseName, fixedCount);
+    }
+  }
+  
+  const fixedComponents = Array.from(fixedComponentMap.entries()).map(([name, count]) => ({ name, count }));
+  
+  return {
+    fixedComponents,
+    totalFixed
+  };
+}
+
+/**
  * Processes a group of components into icon data
  */
 async function processIconGroup(baseName: string, components: ComponentNode[]): Promise<IconData> {
@@ -941,7 +1046,7 @@ async function saveIconsExport(iconsData: IconData[]): Promise<void> {
 // ============================================================================
 
 // Main plugin function
-figma.showUI(__html__, { width: 280, height: 144, themeColors: true });
+figma.showUI(__html__, { width: 280, height: 172, themeColors: true });
 
 // Listen for messages from the UI
 figma.ui.onmessage = async (msg: any) => {
@@ -963,11 +1068,70 @@ figma.ui.onmessage = async (msg: any) => {
     } catch (error) {
       console.error('Failed to navigate to node:', error);
     }
+  } else if (msg.type === 'fix-constraints') {
+    // Fix all constraints to SCALE
+    try {
+      const currentPage = figma.currentPage;
+      if (!currentPage) {
+        throw new Error('No current page found.');
+      }
+      
+      // Re-scan the page to get current components
+      const { components, componentSets } = getComponentsFromPage(currentPage);
+      const componentSetChildIds = collectComponentSetChildIds(componentSets);
+      const individualComponents = components.filter(comp => !componentSetChildIds.has((comp as any).id));
+      const allComponentsToCheck: ComponentNode[] = [];
+      
+      componentSets.forEach(componentSet => {
+        if ('children' in componentSet) {
+          for (const child of componentSet.children) {
+            if (child.type === 'COMPONENT') {
+              allComponentsToCheck.push(child as ComponentNode);
+            }
+          }
+        }
+      });
+      
+      allComponentsToCheck.push(...individualComponents);
+      
+      // Fix the constraints
+      const result = fixConstraints(allComponentsToCheck);
+      
+      // Send result back to UI
+      figma.ui.postMessage({
+        type: 'constraints-fixed',
+        fixedComponents: result.fixedComponents,
+        totalFixed: result.totalFixed
+      });
+    } catch (error: any) {
+      figma.ui.postMessage({ type: 'error', message: `Error fixing constraints: ${error.message}` });
+    }
+  } else if (msg.type === 'run-pre-checks') {
+    // Run pre-checks only, without exporting
+    try {
+      const result = await runPreChecks();
+      if (result) {
+        // All checks passed
+        figma.ui.postMessage({ type: 'pre-checks-passed' });
+      }
+      // If result is null, checks failed (already reported to UI)
+    } catch (error: any) {
+      figma.ui.postMessage({ type: 'error', message: `Error: ${error.message}` });
+    }
   }
 };
 
-async function exportIcons(): Promise<void> {
-  // Get the currently viewed page
+/**
+ * Run pre-checks on the current page
+ * Returns component data if all checks pass, or null if any check fails
+ */
+async function runPreChecks(): Promise<{
+  componentSets: any[];
+  components: ComponentNode[];
+  individualComponents: ComponentNode[];
+  allComponentsToCheck: ComponentNode[];
+  componentSetChildIds: Set<string>;
+} | null> {
   const currentPage = figma.currentPage;
   if (!currentPage) {
     throw new Error('No current page found. Please select a page with your icon components.');
@@ -1007,7 +1171,7 @@ async function exportIcons(): Promise<void> {
   allComponentsToCheck.push(...individualComponents);
 
   // Resize window to accommodate checklist
-  figma.ui.resize(280, 320);
+  figma.ui.resize(280, 392);
 
   // Run all pre-checks sequentially
   const checks = [
@@ -1022,6 +1186,10 @@ async function exportIcons(): Promise<void> {
     { 
       metadata: PRE_CHECK_METADATA.fillsOnly,
       run: () => runFillsOnlyCheck(allComponentsToCheck)
+    },
+    { 
+      metadata: PRE_CHECK_METADATA.constraints,
+      run: () => runConstraintsCheck(allComponentsToCheck)
     }
   ];
 
@@ -1059,10 +1227,32 @@ async function exportIcons(): Promise<void> {
     passed: allPassed
   });
 
-  // If any check failed, abort export
+  // If any check failed, return null
   if (!allPassed) {
+    return null;
+  }
+  
+  // Return the collected data for export
+  return {
+    componentSets,
+    components,
+    individualComponents,
+    allComponentsToCheck,
+    componentSetChildIds
+  };
+}
+
+async function exportIcons(): Promise<void> {
+  // Run pre-checks first
+  const preCheckResult = await runPreChecks();
+  
+  // If pre-checks failed, abort export
+  if (!preCheckResult) {
     return;
   }
+  
+  // Extract the component data from pre-check result
+  const { componentSets, components, individualComponents } = preCheckResult;
   
   // Calculate total items to process
   const totalItems = componentSets.length + components.length;

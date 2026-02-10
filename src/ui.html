@@ -35,6 +35,18 @@
     .button:hover {
       background-color: var(--figma-color-bg-brand-hover);
     }
+    .button-secondary {
+      background-color: transparent;
+      color: var(--figma-color-text);
+      border: 1px solid var(--figma-color-border);
+      margin-top: 8px;
+    }
+    .button-secondary:hover {
+      background-color: var(--figma-color-bg-hover);
+    }
+    .button-secondary .button-content {
+      color: var(--figma-color-text);
+    }
     .button-content {
       display: flex;
       align-items: center;
@@ -150,12 +162,36 @@
     .component-link:hover {
       color: var(--figma-color-text-brand-hover);
     }
+    
+    .fix-button {
+      margin-top: 8px;
+      padding: 4px 8px;
+      font-size: 0.625rem;
+      line-height: 0.875rem;
+      background-color: var(--figma-color-bg-brand);
+      color: var(--figma-color-text-on-brand);
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: 'Inter', sans-serif;
+      font-weight: 450;
+    }
+    
+    .fix-button:hover {
+      background-color: var(--figma-color-bg-brand-hover);
+    }
   </style>
 </head>
 <body>
   <button id="export-btn" class="button">
     <div class="button-content">
       <span id="button-text">Export Icons</span>
+    </div>
+  </button>
+  
+  <button id="precheck-btn" class="button button-secondary">
+    <div class="button-content">
+      <span id="precheck-button-text">Run Pre-Checks</span>
     </div>
   </button>
   
@@ -170,10 +206,13 @@
   <script>
     const exportBtn = document.getElementById('export-btn');
     const buttonText = document.getElementById('button-text');
+    const precheckBtn = document.getElementById('precheck-btn');
+    const precheckButtonText = document.getElementById('precheck-button-text');
     const descriptionEl = document.getElementById('description-text');
     const checklistEl = document.getElementById('checklist');
     const originalDescriptionText = 'This plugin will export all components from the current page as a single JSON file with embedded SVG and metadata.';
     const originalButtonText = buttonText ? buttonText.textContent : 'Export Icons';
+    const originalPrecheckButtonText = precheckButtonText ? precheckButtonText.textContent : 'Run Pre-Checks';
     
     
     function setButtonExportingState() {
@@ -181,6 +220,16 @@
         buttonText.textContent = 'Exporting icons...';
       }
       exportBtn.classList.add('processing');
+      exportBtn.disabled = true;
+      precheckBtn.disabled = true;
+    }
+    
+    function setButtonPrecheckingState() {
+      if (precheckButtonText) {
+        precheckButtonText.textContent = 'Running checks...';
+      }
+      precheckBtn.classList.add('processing');
+      precheckBtn.disabled = true;
       exportBtn.disabled = true;
     }
 
@@ -200,8 +249,13 @@
       if (buttonText) {
         buttonText.textContent = originalButtonText || 'Export Icons';
       }
+      if (precheckButtonText) {
+        precheckButtonText.textContent = originalPrecheckButtonText || 'Run Pre-Checks';
+      }
       exportBtn.classList.remove('processing');
       exportBtn.disabled = false;
+      precheckBtn.classList.remove('processing');
+      precheckBtn.disabled = false;
       resetDescription();
     }
     
@@ -317,6 +371,20 @@
         } else {
           messageEl.textContent = message;
         }
+        
+        // Add fix button for constraints check
+        if (checkId === 'constraints') {
+          let fixBtn = contentEl.querySelector('.fix-button');
+          if (!fixBtn) {
+            fixBtn = document.createElement('button');
+            fixBtn.className = 'fix-button';
+            fixBtn.textContent = 'Fix Constraints';
+            fixBtn.onclick = () => {
+              parent.postMessage({ pluginMessage: { type: 'fix-constraints' } }, '*');
+            };
+            contentEl.appendChild(fixBtn);
+          }
+        }
       } else if (!passed && message) {
         let messageEl = contentEl.querySelector('.check-message');
         if (!messageEl) {
@@ -334,6 +402,14 @@
       clearChecklist(); // Clear checklist on new export
       
       parent.postMessage({ pluginMessage: { type: 'export-icons' } }, '*');
+    });
+    
+    precheckBtn.addEventListener('click', () => {
+      updateDescription('Running pre-checks...');
+      setButtonPrecheckingState();
+      clearChecklist(); // Clear checklist on new check
+      
+      parent.postMessage({ pluginMessage: { type: 'run-pre-checks' } }, '*');
     });
     
     
@@ -379,11 +455,62 @@
           resetButton();
         }
         // If checks passed, continue with export (button stays in exporting state)
+      } else if (msg.type === 'constraints-fixed') {
+        // Handle constraints fix result
+        const itemEl = document.getElementById('check-constraints');
+        if (itemEl) {
+          const iconEl = itemEl.querySelector('.check-icon');
+          const labelEl = itemEl.querySelector('.check-label');
+          const contentEl = itemEl.querySelector('.check-content');
+          
+          // Update icon to passed
+          iconEl.classList.remove('running', 'failed');
+          iconEl.classList.add('passed');
+          
+          // Update label
+          if (labelEl) {
+            labelEl.textContent = 'Constraints updated to "Scale"';
+          }
+          
+          // Remove error message and fix button, add success summary
+          const messageEl = contentEl.querySelector('.check-message');
+          const fixBtn = contentEl.querySelector('.fix-button');
+          if (messageEl) messageEl.remove();
+          if (fixBtn) fixBtn.remove();
+          
+          // Add success summary
+          const summaryEl = document.createElement('div');
+          summaryEl.className = 'check-message';
+          summaryEl.style.color = 'var(--figma-color-text)';
+          
+          if (msg.fixedComponents && msg.fixedComponents.length > 0) {
+            const summaryText = document.createElement('div');
+            summaryText.textContent = 'Updated constraints to "Scale":';
+            summaryEl.appendChild(summaryText);
+            
+            const componentList = msg.fixedComponents
+              .map(comp => `${comp.name} (${comp.count} layer${comp.count > 1 ? 's' : ''})`)
+              .join(', ');
+            
+            const listEl = document.createElement('div');
+            listEl.textContent = componentList;
+            listEl.style.marginTop = '4px';
+            summaryEl.appendChild(listEl);
+          } else {
+            summaryEl.textContent = 'No constraints needed updating.';
+          }
+          
+          contentEl.appendChild(summaryEl);
+        }
       } else if (msg.type === 'success') {
         // Don't show success status - browser download prompt indicates success
         resetButton();
         // Note: checklist remains visible (persistence requirement)
         isDownloading = false;
+      } else if (msg.type === 'pre-checks-passed') {
+        // Pre-checks completed successfully (checks-only mode)
+        resetButton();
+        // Checklist remains visible showing all green checks
       } else if (msg.type === 'error') {
         console.error('Export error:', msg.message);
         resetButton();
