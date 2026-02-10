@@ -53,6 +53,103 @@
       max-width: 240px;
       word-wrap: break-word;
     }
+    
+    /* Checklist styles */
+    #checklist {
+      margin-top: 16px;
+      width: 100%;
+      max-width: 240px;
+      display: none;
+    }
+    
+    #checklist.visible {
+      display: block;
+    }
+    
+    .check-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    
+    .check-icon {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 2px;
+    }
+    
+    .check-icon.running {
+      border: 2px solid var(--figma-color-text-secondary);
+      border-top-color: var(--figma-color-bg-brand);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    
+    .check-icon.passed::before {
+      content: '✓';
+      color: var(--figma-color-text-success);
+      font-size: 16px;
+      font-weight: bold;
+    }
+    
+    .check-icon.failed::before {
+      content: '✕';
+      color: var(--figma-color-text-danger);
+      font-size: 16px;
+      font-weight: bold;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    .check-content {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .check-label {
+      display: block;
+      font-size: 0.6875rem;
+      line-height: 1rem;
+      color: var(--figma-color-text);
+      word-wrap: break-word;
+    }
+    
+    .check-message {
+      display: block;
+      margin-top: 4px;
+      font-size: 0.625rem;
+      line-height: 0.875rem;
+      color: var(--figma-color-text-danger);
+      word-wrap: break-word;
+    }
+    
+    .component-list {
+      margin: 4px 0 0 0;
+      padding-left: 16px;
+      list-style-type: disc;
+    }
+    
+    .component-list li {
+      margin: 2px 0;
+    }
+    
+    .component-link {
+      color: var(--figma-color-text-brand);
+      text-decoration: underline;
+      cursor: pointer;
+    }
+    
+    .component-link:hover {
+      color: var(--figma-color-text-brand-hover);
+    }
   </style>
 </head>
 <body>
@@ -61,6 +158,11 @@
       <span id="button-text">Export Icons</span>
     </div>
   </button>
+  
+  <div id="checklist">
+    <!-- Check items will be dynamically added here -->
+  </div>
+  
   <div id="description-text" class="description">
     This plugin will export all components from the current page as a single JSON file with embedded SVG and metadata.
   </div>
@@ -69,6 +171,7 @@
     const exportBtn = document.getElementById('export-btn');
     const buttonText = document.getElementById('button-text');
     const descriptionEl = document.getElementById('description-text');
+    const checklistEl = document.getElementById('checklist');
     const originalDescriptionText = 'This plugin will export all components from the current page as a single JSON file with embedded SVG and metadata.';
     const originalButtonText = buttonText ? buttonText.textContent : 'Export Icons';
     
@@ -102,9 +205,133 @@
       resetDescription();
     }
     
+    function clearChecklist() {
+      if (checklistEl) {
+        checklistEl.innerHTML = '';
+        checklistEl.classList.remove('visible');
+      }
+    }
+    
+    function showChecklist() {
+      if (checklistEl) {
+        checklistEl.classList.add('visible');
+      }
+    }
+    
+    function createCheckItem(checkId, label) {
+      const itemEl = document.createElement('div');
+      itemEl.className = 'check-item';
+      itemEl.id = `check-${checkId}`;
+      
+      const iconEl = document.createElement('span');
+      iconEl.className = 'check-icon running';
+      
+      const contentEl = document.createElement('div');
+      contentEl.className = 'check-content';
+      
+      const labelEl = document.createElement('span');
+      labelEl.className = 'check-label';
+      labelEl.textContent = label;
+      
+      contentEl.appendChild(labelEl);
+      itemEl.appendChild(iconEl);
+      itemEl.appendChild(contentEl);
+      
+      return itemEl;
+    }
+    
+    function updateCheckItem(checkId, label, passed, message, offendingComponents) {
+      const itemEl = document.getElementById(`check-${checkId}`);
+      if (!itemEl) return;
+      
+      const iconEl = itemEl.querySelector('.check-icon');
+      const labelEl = itemEl.querySelector('.check-label');
+      const contentEl = itemEl.querySelector('.check-content');
+      
+      // Update icon state
+      iconEl.classList.remove('running');
+      if (passed) {
+        iconEl.classList.add('passed');
+      } else {
+        iconEl.classList.add('failed');
+      }
+      
+      // Update label
+      if (labelEl) {
+        labelEl.textContent = label;
+      }
+      
+      // Add error message if failed
+      if (!passed && message && offendingComponents && offendingComponents.length > 0) {
+        let messageEl = contentEl.querySelector('.check-message');
+        if (!messageEl) {
+          messageEl = document.createElement('div');
+          messageEl.className = 'check-message';
+          contentEl.appendChild(messageEl);
+        } else {
+          messageEl.innerHTML = ''; // Clear previous content
+        }
+        
+        // Parse the message to extract the prefix
+        const messageMatch = message.match(/^(.+?)Component sets with errors:/);
+        if (messageMatch) {
+          const prefix = messageMatch[1].trim();
+          if (prefix) {
+            const prefixEl = document.createElement('div');
+            prefixEl.textContent = prefix;
+            messageEl.appendChild(prefixEl);
+          }
+          
+          // Create unordered list for components
+          const ul = document.createElement('ul');
+          ul.className = 'component-list';
+          
+          offendingComponents.forEach((comp) => {
+            const li = document.createElement('li');
+            const link = document.createElement('a');
+            link.textContent = comp.name;
+            link.href = '#';
+            link.className = 'component-link';
+            link.onclick = (e) => {
+              e.preventDefault();
+              parent.postMessage({ 
+                pluginMessage: { 
+                  type: 'navigate-to-node', 
+                  nodeId: comp.id 
+                } 
+              }, '*');
+            };
+            li.appendChild(link);
+            ul.appendChild(li);
+          });
+          
+          messageEl.appendChild(ul);
+          
+          // Check if there's a "more" count at the end
+          const moreMatch = message.match(/\(and \d+ more\)$/);
+          if (moreMatch) {
+            const moreEl = document.createElement('div');
+            moreEl.textContent = moreMatch[0];
+            messageEl.appendChild(moreEl);
+          }
+        } else {
+          messageEl.textContent = message;
+        }
+      } else if (!passed && message) {
+        let messageEl = contentEl.querySelector('.check-message');
+        if (!messageEl) {
+          messageEl = document.createElement('div');
+          messageEl.className = 'check-message';
+          contentEl.appendChild(messageEl);
+        }
+        messageEl.textContent = message;
+      }
+    }
+    
     exportBtn.addEventListener('click', () => {
       updateDescription('Preparing export...');
       setButtonExportingState();
+      clearChecklist(); // Clear checklist on new export
       
       parent.postMessage({ pluginMessage: { type: 'export-icons' } }, '*');
     });
@@ -138,13 +365,29 @@
 
       console.log('UI received message:', msg.type, msg);
       
-      if (msg.type === 'success') {
+      if (msg.type === 'pre-check-start') {
+        // Show checklist if hidden, add check item with spinner
+        showChecklist();
+        const checkItem = createCheckItem(msg.checkId, msg.label);
+        checklistEl.appendChild(checkItem);
+      } else if (msg.type === 'pre-check-result') {
+        // Update check item with result
+        updateCheckItem(msg.checkId, msg.label, msg.passed, msg.message, msg.offendingComponents);
+      } else if (msg.type === 'pre-checks-complete') {
+        // If checks failed, reset button but keep checklist visible
+        if (!msg.passed) {
+          resetButton();
+        }
+        // If checks passed, continue with export (button stays in exporting state)
+      } else if (msg.type === 'success') {
         // Don't show success status - browser download prompt indicates success
         resetButton();
+        // Note: checklist remains visible (persistence requirement)
         isDownloading = false;
       } else if (msg.type === 'error') {
         console.error('Export error:', msg.message);
         resetButton();
+        // Note: checklist remains visible (persistence requirement)
         isDownloading = false;
       } else if (msg.type === 'status') {
         // Keep button in exporting state; only update description text
@@ -158,6 +401,7 @@
         downloadFile(msg.data.content, msg.data.filename, 'application/json');
         // Don't show success status - browser download prompt indicates success
         resetButton();
+        // Note: checklist remains visible (persistence requirement)
       }
     };
 

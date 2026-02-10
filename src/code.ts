@@ -32,6 +32,14 @@ interface ValidationResult {
   errors: string[];
 }
 
+interface PreCheckResult {
+  checkId: string;
+  label: string;
+  passed: boolean;
+  message?: string; // populated on failure
+  offendingComponents?: Array<{ name: string; id: string }>; // component sets with errors
+}
+
 // ============================================================================
 // CONSTANTS
 // ============================================================================
@@ -57,9 +65,42 @@ const YIELD_FREQUENCY = 5;
 
 const NAME_SEPARATORS = ['/', '=', ' - '];
 
+// Pre-check metadata
+const PRE_CHECK_METADATA = {
+  duplicateNames: {
+    checkId: 'duplicateNames',
+    label: 'Checking for duplicate names...'
+  },
+  layerNames: {
+    checkId: 'layerNames',
+    label: 'Checking layer names...'
+  },
+  fillsOnly: {
+    checkId: 'fillsOnly',
+    label: 'Checking for fills only (no strokes)...'
+  }
+};
+
+// Shape node types that should be named "Vector"
+const SHAPE_NODE_TYPES = new Set([
+  'VECTOR', 'RECTANGLE', 'ELLIPSE', 'POLYGON', 'STAR', 'LINE', 'BOOLEAN_OPERATION'
+]);
+
 // ============================================================================
 // HELPER UTILITIES
 // ============================================================================
+
+/**
+ * Gets the base name for a component, checking parent component set first
+ */
+function getComponentBaseName(component: ComponentNode): string {
+  // If component is part of a component set, use the set's name
+  if (component.parent && component.parent.type === 'COMPONENT_SET') {
+    return (component.parent as any).name;
+  }
+  // Otherwise, extract base name from the component name
+  return extractBaseName(component.name);
+}
 
 function extractBaseName(rawName: string): string {
   for (const separator of NAME_SEPARATORS) {
@@ -560,6 +601,173 @@ function checkForDuplicateNames(
 }
 
 /**
+ * Pre-check: Runs duplicate names check and returns a PreCheckResult
+ */
+function runDuplicateNamesCheck(
+  componentSets: any[],
+  components: ComponentNode[],
+  componentSetChildIds: Set<string>
+): PreCheckResult {
+  const duplicateNames = checkForDuplicateNames(componentSets, components, componentSetChildIds);
+  
+  if (duplicateNames.length === 0) {
+    return {
+      checkId: PRE_CHECK_METADATA.duplicateNames.checkId,
+      label: 'No duplicate names found',
+      passed: true
+    };
+  }
+  
+  const isPlural = duplicateNames.length > 1;
+  const duplicateLabel = isPlural ? 'Duplicates' : 'Duplicate';
+  const errorMessage = `${duplicateLabel}: ${duplicateNames.join(', ')}`;
+  
+  return {
+    checkId: PRE_CHECK_METADATA.duplicateNames.checkId,
+    label: 'Duplicate names detected',
+    passed: false,
+    message: errorMessage
+  };
+}
+
+/**
+ * Pre-check: Verifies all shape layers inside components are named "Vector"
+ */
+function runLayerNamesCheck(components: ComponentNode[]): PreCheckResult {
+  const offendingComponentSets = new Map<string, string>(); // name -> node ID
+  const MAX_ERRORS = 10;
+  
+  function traverseNode(node: SceneNode, baseName: string, nodeId: string) {
+    // Check if this is a shape node type
+    if (SHAPE_NODE_TYPES.has(node.type)) {
+      if (node.name !== 'Vector') {
+        offendingComponentSets.set(baseName, nodeId);
+      }
+    }
+    
+    // Recursively traverse children if they exist
+    if ('children' in node) {
+      for (const child of node.children) {
+        traverseNode(child, baseName, nodeId);
+      }
+    }
+  }
+  
+  // Check all components
+  for (const component of components) {
+    const baseName = getComponentBaseName(component);
+    // Get the component set node if it exists, otherwise use the component itself
+    const targetNode = (component.parent && component.parent.type === 'COMPONENT_SET') 
+      ? component.parent 
+      : component;
+    const nodeId = (targetNode as any).id;
+    
+    if ('children' in component) {
+      for (const child of component.children) {
+        traverseNode(child, baseName, nodeId);
+      }
+    }
+  }
+  
+  if (offendingComponentSets.size === 0) {
+    return {
+      checkId: PRE_CHECK_METADATA.layerNames.checkId,
+      label: 'All shape layers correctly named "Vector"',
+      passed: true
+    };
+  }
+  
+  const componentSetList = Array.from(offendingComponentSets.entries()).slice(0, MAX_ERRORS);
+  const offendingComponents = componentSetList.map(([name, id]) => ({ name, id }));
+  const moreCount = offendingComponentSets.size > MAX_ERRORS ? `(and ${offendingComponentSets.size - MAX_ERRORS} more)` : '';
+  const errorMessage = `Shape layers must be named "Vector". Component sets with errors: ${componentSetList.map(([name]) => name).join(', ')}${moreCount ? ' ' + moreCount : ''}`;
+  
+  return {
+    checkId: PRE_CHECK_METADATA.layerNames.checkId,
+    label: 'Invalid layer names detected',
+    passed: false,
+    message: errorMessage,
+    offendingComponents
+  };
+}
+
+/**
+ * Pre-check: Verifies all nodes only have fills (no visible strokes)
+ */
+function runFillsOnlyCheck(components: ComponentNode[]): PreCheckResult {
+  const offendingComponentSets = new Map<string, string>(); // name -> node ID
+  const MAX_ERRORS = 10;
+  
+  function hasVisibleStrokes(node: any): boolean {
+    if (!('strokes' in node)) return false;
+    
+    const strokes = node.strokes;
+    if (!strokes || strokes.length === 0) return false;
+    
+    // Check if any stroke is visible
+    for (const stroke of strokes) {
+      // Check if stroke is visible (not explicitly hidden)
+      if (stroke.visible !== false) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
+  
+  function traverseNode(node: SceneNode, baseName: string, nodeId: string) {
+    // Check if this node has visible strokes
+    if (hasVisibleStrokes(node)) {
+      offendingComponentSets.set(baseName, nodeId);
+    }
+    
+    // Recursively traverse children if they exist
+    if ('children' in node) {
+      for (const child of node.children) {
+        traverseNode(child, baseName, nodeId);
+      }
+    }
+  }
+  
+  // Check all components
+  for (const component of components) {
+    const baseName = getComponentBaseName(component);
+    // Get the component set node if it exists, otherwise use the component itself
+    const targetNode = (component.parent && component.parent.type === 'COMPONENT_SET') 
+      ? component.parent 
+      : component;
+    const nodeId = (targetNode as any).id;
+    
+    if ('children' in component) {
+      for (const child of component.children) {
+        traverseNode(child, baseName, nodeId);
+      }
+    }
+  }
+  
+  if (offendingComponentSets.size === 0) {
+    return {
+      checkId: PRE_CHECK_METADATA.fillsOnly.checkId,
+      label: 'All layers use fills only (no strokes)',
+      passed: true
+    };
+  }
+  
+  const componentSetList = Array.from(offendingComponentSets.entries()).slice(0, MAX_ERRORS);
+  const offendingComponents = componentSetList.map(([name, id]) => ({ name, id }));
+  const moreCount = offendingComponentSets.size > MAX_ERRORS ? `(and ${offendingComponentSets.size - MAX_ERRORS} more)` : '';
+  const errorMessage = `Layers must use fills only (no strokes). Component sets with errors: ${componentSetList.map(([name]) => name).join(', ')}${moreCount ? ' ' + moreCount : ''}`;
+  
+  return {
+    checkId: PRE_CHECK_METADATA.fillsOnly.checkId,
+    label: 'Strokes detected',
+    passed: false,
+    message: errorMessage,
+    offendingComponents
+  };
+}
+
+/**
  * Processes a group of components into icon data
  */
 async function processIconGroup(baseName: string, components: ComponentNode[]): Promise<IconData> {
@@ -744,6 +952,17 @@ figma.ui.onmessage = async (msg: any) => {
     } catch (error: any) {
       figma.ui.postMessage({ type: 'error', message: `Error: ${error.message}` });
     }
+  } else if (msg.type === 'navigate-to-node') {
+    // Navigate to the node with the given ID
+    try {
+      const node = figma.getNodeById(msg.nodeId);
+      if (node) {
+        figma.currentPage.selection = [node as SceneNode];
+        figma.viewport.scrollAndZoomIntoView([node as SceneNode]);
+      }
+    } catch (error) {
+      console.error('Failed to navigate to node:', error);
+    }
   }
 };
 
@@ -769,15 +988,79 @@ async function exportIcons(): Promise<void> {
 
   const componentSetChildIds = collectComponentSetChildIds(componentSets);
 
-  // Check for duplicate icon names before processing
-  const duplicateNames = checkForDuplicateNames(componentSets, components, componentSetChildIds);
-  if (duplicateNames.length > 0) {
-    const isPlural = duplicateNames.length > 1;
-    const duplicateLabel = isPlural ? 'Duplicates' : 'Duplicate';
-    const errorMessage = `${duplicateLabel}: ${duplicateNames.join(', ')}`;
+  // Get list of all component nodes to check (same list that will be exported)
+  const individualComponents = components.filter(comp => !componentSetChildIds.has((comp as any).id));
+  const allComponentsToCheck: ComponentNode[] = [];
+  
+  // Add all components from component sets
+  componentSets.forEach(componentSet => {
+    if ('children' in componentSet) {
+      for (const child of componentSet.children) {
+        if (child.type === 'COMPONENT') {
+          allComponentsToCheck.push(child as ComponentNode);
+        }
+      }
+    }
+  });
+  
+  // Add individual components
+  allComponentsToCheck.push(...individualComponents);
+
+  // Resize window to accommodate checklist
+  figma.ui.resize(280, 320);
+
+  // Run all pre-checks sequentially
+  const checks = [
+    { 
+      metadata: PRE_CHECK_METADATA.duplicateNames,
+      run: () => runDuplicateNamesCheck(componentSets, components, componentSetChildIds)
+    },
+    { 
+      metadata: PRE_CHECK_METADATA.layerNames,
+      run: () => runLayerNamesCheck(allComponentsToCheck)
+    },
+    { 
+      metadata: PRE_CHECK_METADATA.fillsOnly,
+      run: () => runFillsOnlyCheck(allComponentsToCheck)
+    }
+  ];
+
+  let allPassed = true;
+  
+  for (const check of checks) {
+    // Send start message
+    figma.ui.postMessage({ 
+      type: 'pre-check-start',
+      checkId: check.metadata.checkId,
+      label: check.metadata.label
+    });
     
-    // Use Figma's notification system to show the error
-    figma.notify(errorMessage, { error: true, timeout: 10000 });
+    // Run the check
+    const result = check.run();
+    
+    // Send result message
+    figma.ui.postMessage({ 
+      type: 'pre-check-result',
+      checkId: result.checkId,
+      label: result.label,
+      passed: result.passed,
+      message: result.message,
+      offendingComponents: result.offendingComponents
+    });
+    
+    if (!result.passed) {
+      allPassed = false;
+    }
+  }
+
+  // Send pre-checks complete message
+  figma.ui.postMessage({ 
+    type: 'pre-checks-complete',
+    passed: allPassed
+  });
+
+  // If any check failed, abort export
+  if (!allPassed) {
     return;
   }
   
@@ -844,8 +1127,7 @@ async function exportIcons(): Promise<void> {
   }
 
   // Process individual components (not part of component sets)
-  // Filter out components that are already part of component sets
-  const individualComponents = components.filter(comp => !componentSetChildIds.has((comp as any).id));
+  // Already filtered earlier in pre-checks
   
   if (individualComponents.length > 0) {
     figma.ui.postMessage({ 
