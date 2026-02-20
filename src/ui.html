@@ -385,6 +385,19 @@
             contentEl.appendChild(fixBtn);
           }
         }
+        // Add fix button for layer names check
+        if (checkId === 'layerNames') {
+          let fixBtn = contentEl.querySelector('.fix-button');
+          if (!fixBtn) {
+            fixBtn = document.createElement('button');
+            fixBtn.className = 'fix-button';
+            fixBtn.textContent = 'Rename to Vector';
+            fixBtn.onclick = () => {
+              parent.postMessage({ pluginMessage: { type: 'fix-layer-names' } }, '*');
+            };
+            contentEl.appendChild(fixBtn);
+          }
+        }
       } else if (!passed && message) {
         let messageEl = contentEl.querySelector('.check-message');
         if (!messageEl) {
@@ -500,6 +513,48 @@
             summaryEl.textContent = 'No constraints needed updating.';
           }
           
+          contentEl.appendChild(summaryEl);
+        }
+      } else if (msg.type === 'layer-names-fixed') {
+        const itemEl = document.getElementById('check-layerNames');
+        if (itemEl) {
+          const iconEl = itemEl.querySelector('.check-icon');
+          const labelEl = itemEl.querySelector('.check-label');
+          const contentEl = itemEl.querySelector('.check-content');
+
+          iconEl.classList.remove('running', 'failed');
+          iconEl.classList.add('passed');
+
+          if (labelEl) {
+            labelEl.textContent = 'Layer names updated to "Vector"';
+          }
+
+          const messageEl = contentEl.querySelector('.check-message');
+          const fixBtn = contentEl.querySelector('.fix-button');
+          if (messageEl) messageEl.remove();
+          if (fixBtn) fixBtn.remove();
+
+          const summaryEl = document.createElement('div');
+          summaryEl.className = 'check-message';
+          summaryEl.style.color = 'var(--figma-color-text)';
+
+          if (msg.fixedComponents && msg.fixedComponents.length > 0) {
+            const summaryText = document.createElement('div');
+            summaryText.textContent = 'Renamed to "Vector":';
+            summaryEl.appendChild(summaryText);
+
+            const componentList = msg.fixedComponents
+              .map(comp => `${comp.name} (${comp.count} layer${comp.count > 1 ? 's' : ''})`)
+              .join(', ');
+
+            const listEl = document.createElement('div');
+            listEl.textContent = componentList;
+            listEl.style.marginTop = '4px';
+            summaryEl.appendChild(listEl);
+          } else {
+            summaryEl.textContent = 'No layer names needed updating.';
+          }
+
           contentEl.appendChild(summaryEl);
         }
       } else if (msg.type === 'success') {

@@ -873,6 +873,43 @@ function fixConstraints(components: ComponentNode[]): { fixedComponents: Array<{
 }
 
 /**
+ * Fix layer names: Rename all shape layers inside components to "Vector"
+ */
+function fixLayerNames(components: ComponentNode[]): { fixedComponents: Array<{ name: string, count: number }>, totalFixed: number } {
+  const fixedComponentMap = new Map<string, number>(); // name -> count of layers renamed
+  let totalFixed = 0;
+
+  function traverseNode(node: SceneNode, baseName: string): void {
+    if (SHAPE_NODE_TYPES.has(node.type) && node.name !== 'Vector') {
+      node.name = 'Vector';
+      fixedComponentMap.set(baseName, (fixedComponentMap.get(baseName) ?? 0) + 1);
+      totalFixed++;
+    }
+    if ('children' in node) {
+      for (const child of node.children) {
+        traverseNode(child, baseName);
+      }
+    }
+  }
+
+  for (const component of components) {
+    const baseName = getComponentBaseName(component);
+    if ('children' in component) {
+      for (const child of component.children) {
+        traverseNode(child, baseName);
+      }
+    }
+  }
+
+  const fixedComponents = Array.from(fixedComponentMap.entries()).map(([name, count]) => ({ name, count }));
+
+  return {
+    fixedComponents,
+    totalFixed
+  };
+}
+
+/**
  * Processes a group of components into icon data
  */
 async function processIconGroup(baseName: string, components: ComponentNode[]): Promise<IconData> {
@@ -1105,6 +1142,40 @@ figma.ui.onmessage = async (msg: any) => {
       });
     } catch (error: any) {
       figma.ui.postMessage({ type: 'error', message: `Error fixing constraints: ${error.message}` });
+    }
+  } else if (msg.type === 'fix-layer-names') {
+    try {
+      const currentPage = figma.currentPage;
+      if (!currentPage) {
+        throw new Error('No current page found.');
+      }
+
+      const { components, componentSets } = getComponentsFromPage(currentPage);
+      const componentSetChildIds = collectComponentSetChildIds(componentSets);
+      const individualComponents = components.filter(comp => !componentSetChildIds.has((comp as any).id));
+      const allComponentsToCheck: ComponentNode[] = [];
+
+      componentSets.forEach(componentSet => {
+        if ('children' in componentSet) {
+          for (const child of componentSet.children) {
+            if (child.type === 'COMPONENT') {
+              allComponentsToCheck.push(child as ComponentNode);
+            }
+          }
+        }
+      });
+
+      allComponentsToCheck.push(...individualComponents);
+
+      const result = fixLayerNames(allComponentsToCheck);
+
+      figma.ui.postMessage({
+        type: 'layer-names-fixed',
+        fixedComponents: result.fixedComponents,
+        totalFixed: result.totalFixed
+      });
+    } catch (error: any) {
+      figma.ui.postMessage({ type: 'error', message: `Error fixing layer names: ${error.message}` });
     }
   } else if (msg.type === 'run-pre-checks') {
     // Run pre-checks only, without exporting
